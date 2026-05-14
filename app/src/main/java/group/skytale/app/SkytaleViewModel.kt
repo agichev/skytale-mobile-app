@@ -480,6 +480,26 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun saveContactNicknameOverride(userId: String, value: String) {
+        val normalized = value.trim().replace(Regex("\\s+"), " ")
+        if (normalized.isNotEmpty()) {
+            val validationError = validateNickname(normalized)
+            if (validationError != null) {
+                state.value = state.value.copy(errorMessage = validationError)
+                return
+            }
+        }
+        viewModelScope.launch {
+            runBusy {
+                if (normalized.isBlank()) {
+                    repository.clearUserNicknameOverride(userId)
+                } else {
+                    repository.setUserNicknameOverride(userId, normalized)
+                }
+            }
+        }
+    }
+
     fun openChat(chatId: String) {
         state.value = state.value.copy(
             openedChatId = chatId,
