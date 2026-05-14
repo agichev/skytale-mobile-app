@@ -117,13 +117,18 @@ class SkytaleRepository(
     val typingFlow: StateFlow<Map<String, String>> = typingState
     val incomingAlerts: SharedFlow<IncomingAlert> = incomingAlertEvents.asSharedFlow()
 
-    fun observeContacts(): Flow<List<ContactModel>> = contacts.observeAll().map { list ->
+    fun observeContacts(): Flow<List<ContactModel>> = combine(
+        contacts.observeAll(),
+        database.userNicknameOverrideDao().observeAllOverrides(),
+    ) { list, overrides ->
+        val overrideMap = overrides.associateBy { it.userId }
         list.map {
+            val nickname = overrideMap[it.id]?.displayName ?: it.nickname
             ContactModel(
                 user = UserModel(
                     id = it.id,
                     username = it.username,
-                    nickname = it.nickname,
+                    nickname = nickname,
                     about = it.about,
                     language = AppLanguage.fromCode(it.language),
                     avatarUrl = it.avatarUrl,
@@ -142,8 +147,25 @@ class SkytaleRepository(
         }
     }.flowOn(Dispatchers.Default).distinctUntilChanged()
 
-    fun observeChats(): Flow<List<ChatModel>> = combine(chats.observeAll(), settingsFlow) { list, settings ->
-        list.filter { settings.showArchivedChats || !it.isArchived }.map { entity -> entity.toModel(deviceCrypto) }
+    fun observeChats(): Flow<List<ChatModel>> = combine(
+        chats.observeAll(),
+        settingsFlow,
+        database.userNicknameOverrideDao().observeAllOverrides(),
+    ) { list, settings, overrides ->
+        val overrideMap = overrides.associateBy { it.userId }
+        list.filter { settings.showArchivedChats || !it.isArchived }.map { entity ->
+            val model = entity.toModel(deviceCrypto)
+            val peer = model.peer
+            val overriddenNickname = peer?.let { overrideMap[it.id]?.displayName }
+            if (peer != null && overriddenNickname != null) {
+                model.copy(
+                    title = overriddenNickname,
+                    peer = peer.copy(nickname = overriddenNickname),
+                )
+            } else {
+                model
+            }
+        }
     }.flowOn(Dispatchers.Default).distinctUntilChanged()
 
     fun observeFeed(): Flow<List<FeedPostModel>> = feed.observeAll().map { list ->
@@ -159,13 +181,18 @@ class SkytaleRepository(
         }
     }.flowOn(Dispatchers.Default).distinctUntilChanged()
 
-    fun observeMessages(chatId: String, currentUserId: String): Flow<List<MessageModel>> = messages.observeByChat(chatId).map { list ->
+    fun observeMessages(chatId: String, currentUserId: String): Flow<List<MessageModel>> = combine(
+        messages.observeByChat(chatId),
+        database.userNicknameOverrideDao().observeAllOverrides(),
+    ) { list, overrides ->
+        val overrideMap = overrides.associateBy { it.userId }
         list.map {
+            val senderName = overrideMap[it.senderId]?.displayName ?: it.senderName
             MessageModel(
                 id = it.id,
                 chatId = it.chatId,
                 senderId = it.senderId,
-                senderName = it.senderName,
+                senderName = senderName,
                 text = deviceCrypto.decrypt(it.bodyCiphertext),
                 media = it.toMediaModel(),
                 replyToId = it.replyToId,
@@ -197,6 +224,7 @@ class SkytaleRepository(
                     isOwn = it.senderId == currentUserId,
                 )
             }
+            .let { applyNicknameOverrides(it) }
 
     suspend fun refreshBootstrap() {
         val session = secureStore.currentSession ?: return
@@ -458,12 +486,15 @@ class SkytaleRepository(
 
     suspend fun previewMessages(chatId: String): List<MessageModel> {
         val currentUserId = secureStore.currentSession?.userId.orEmpty()
-        return api.messages(chatId, limit = 8).map { dto -> dto.toModel(deviceCrypto, currentUserId) }
+        return applyNicknameOverrides(
+            api.messages(chatId, limit = 8).map { dto -> dto.toModel(deviceCrypto, currentUserId) },
+        )
     }
 
     suspend fun searchMessages(chatId: String, query: String): List<MessageModel> {
         val currentUserId = secureStore.currentSession?.userId.orEmpty()
-        return api.searchMessages(chatId, query).map { dto ->
+        return applyNicknameOverrides(
+            api.searchMessages(chatId, query).map { dto ->
             val entity = dto.toEntity(deviceCrypto)
             MessageModel(
                 id = entity.id,
@@ -479,7 +510,8 @@ class SkytaleRepository(
                 status = entity.status,
                 isOwn = entity.senderId == currentUserId,
             )
-        }
+            },
+        )
     }
 
     suspend fun setChatArchived(chatId: String, enabled: Boolean) {
@@ -584,7 +616,7 @@ class SkytaleRepository(
                     val chat = chats.getById(message.chatId)
                     IncomingAlert(
                         chatId = message.chatId,
-                        title = chat?.title ?: message.sender?.nickname ?: message.sender?.username ?: "Skytale",
+                        title = resolveNotificationTitle(chat, message),
                         body = message.text.ifBlank { if (message.media != null) "Image" else "" },
                     ).also { incomingAlertEvents.tryEmit(it) }
                 } else {
@@ -698,6 +730,36 @@ class SkytaleRepository(
                 pinnedSort = if (existing.isPinned) message.createdAt else 0L,
             ),
         )
+    }
+
+    suspend fun setUserNicknameOverride(userId: String, displayName: String) {
+        database.userNicknameOverrideDao().upsert(UserNicknameOverrideEntity(userId, displayName))
+    }
+
+    suspend fun clearUserNicknameOverride(userId: String) {
+        database.userNicknameOverrideDao().deleteByUserId(userId)
+    }
+
+    private suspend fun applyNicknameOverrides(items: List<MessageModel>): List<MessageModel> {
+        val overrideMap = database.userNicknameOverrideDao().getAll().associateBy { it.userId }
+        return items.map { message ->
+            val overrideName = overrideMap[message.senderId]?.displayName
+            if (overrideName.isNullOrBlank()) {
+                message
+            } else {
+                message.copy(senderName = overrideName)
+            }
+        }
+    }
+
+    private suspend fun resolveNotificationTitle(chat: ChatEntity?, message: ApiMessage): String {
+        val peerId = chat?.peerId
+        val senderId = message.senderId
+        val directOverride = peerId?.let { database.userNicknameOverrideDao().getByUserId(it)?.displayName }
+        if (!directOverride.isNullOrBlank()) return directOverride
+        val senderOverride = database.userNicknameOverrideDao().getByUserId(senderId)?.displayName
+        if (!senderOverride.isNullOrBlank()) return senderOverride
+        return chat?.title ?: message.sender?.nickname ?: message.sender?.username ?: "Skytale"
     }
 }
 
