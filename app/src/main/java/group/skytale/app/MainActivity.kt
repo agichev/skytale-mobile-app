@@ -158,6 +158,7 @@ class MainActivity : FragmentActivity() {
                             onSelectTab = viewModel::selectTab,
                             onOpenChat = viewModel::openChat,
                             onOpenContactChat = viewModel::openContactChat,
+                            onSaveContactNickname = viewModel::saveContactNicknameOverride,
                             onCloseChat = viewModel::closeChat,
                             onSendMessage = viewModel::sendMessage,
                             onEditMessage = viewModel::editMessage,
