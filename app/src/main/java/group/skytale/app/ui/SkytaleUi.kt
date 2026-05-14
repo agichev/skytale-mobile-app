@@ -1,4 +1,4 @@
-﻿package group.skytale.app.ui
+package group.skytale.app.ui
 
 import android.app.Activity
 import android.Manifest
@@ -233,6 +233,7 @@ fun SkytaleRoot(
     onSelectTab: (HomeTab) -> Unit,
     onOpenChat: (String) -> Unit,
     onOpenContactChat: (String) -> Unit,
+    onSaveContactNickname: (String, String) -> Unit,
     onCloseChat: () -> Unit,
     onSendMessage: (String) -> Unit,
     onEditMessage: (String, String) -> Unit,
@@ -337,6 +338,7 @@ fun SkytaleRoot(
                         onSelectTab = onSelectTab,
                         onOpenChat = onOpenChat,
                         onOpenContactChat = onOpenContactChat,
+                        onSaveContactNickname = onSaveContactNickname,
                         onSearchPeopleQueryChanged = onSearchPeopleQueryChanged,
                         onChatListQueryChanged = onChatListQueryChanged,
                         onSearchPeople = onSearchPeople,
@@ -402,6 +404,7 @@ fun SkytaleRoot(
                             onClearComposerMedia = onClearComposerMedia,
                             onUpdateComposerMediaOptions = onUpdateComposerMediaOptions,
                             onCancelPendingUpload = onCancelPendingUpload,
+                            onSaveContactNickname = onSaveContactNickname,
                             onEditMessage = onEditMessage,
                             onDeleteMessage = onDeleteMessage,
                             onReplyMessage = onReplyMessage,
@@ -1059,6 +1062,7 @@ private fun HomeShell(
     onSelectTab: (HomeTab) -> Unit,
     onOpenChat: (String) -> Unit,
     onOpenContactChat: (String) -> Unit,
+    onSaveContactNickname: (String, String) -> Unit,
     onSearchPeopleQueryChanged: (String) -> Unit,
     onChatListQueryChanged: (String) -> Unit,
     onSearchPeople: () -> Unit,
@@ -1542,6 +1546,7 @@ private fun ChatScreen(
     onClearComposerMedia: () -> Unit,
     onUpdateComposerMediaOptions: (Boolean, Boolean) -> Unit,
     onCancelPendingUpload: (String) -> Unit,
+    onSaveContactNickname: (String, String) -> Unit,
     onEditMessage: (String, String) -> Unit,
     onDeleteMessage: (String) -> Unit,
     onReplyMessage: (String) -> Unit,
@@ -2286,6 +2291,7 @@ private fun ChatScreen(
             ContactProfileScreen(
                 strings = strings,
                 user = chat.peer,
+                onSaveNickname = { onSaveContactNickname(chat.peer.id, it) },
                 onClose = { profileVisible = false },
             )
         }
@@ -2606,9 +2612,9 @@ private fun InfoTab(strings: SkytaleStrings) {
     val supportButton = if (isRussian) "Поддержать" else "Support"
     val changelogTitle = if (isRussian) "Changelog установленной версии" else "Installed version changelog"
     val changelogBody = if (isRussian) {
-        "Версия ${BuildConfig.VERSION_NAME}\n• Проведено серверное усиление проверок доступа к чатам и сообщениям.\n• Ужесточена валидация медиа, ссылок и входящих полей для чувствительных запросов.\n• Обновление сфокусировано на закрытии уязвимостей и повышении общей безопасности без изменения основной логики приложения."
+        "Версия ${BuildConfig.VERSION_NAME}\n• Добавлены локальные никнеймы для контактов: теперь можно переименовать человека только для себя.\n• Новый карандаш в профиле собеседника открывает модалку с сохранением персонального имени.\n• Локальное имя подставляется в чатах, профилях, списке контактов и сообщениях."
     } else {
-        "Version ${BuildConfig.VERSION_NAME}\n• Hardened server-side access checks for chats and messages.\n• Tightened validation for media payloads, URLs, and sensitive request fields.\n• This release focuses on vulnerability remediation and overall security hardening without changing the core app flow."
+        "Version ${BuildConfig.VERSION_NAME}\n• Added local nicknames for contacts so you can rename someone only for yourself.\n• A new pencil button in the contact profile opens a modal for saving a personal name.\n• Local names now appear across chats, profiles, contacts, and message history."
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -4179,15 +4185,26 @@ private fun ContactPreviewDialog(
 private fun ContactProfileScreen(
     strings: SkytaleStrings,
     user: group.skytale.app.data.UserModel,
+    onSaveNickname: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     val presenceTick = rememberRelativeTimeTicker()
     val view = LocalView.current
+    val isRussian = remember { Locale.getDefault().language == "ru" }
     val density = LocalDensity.current
     val threshold = with(density) { 42.dp.toPx() }
     val scope = rememberCoroutineScope()
     var dragDistance by remember { mutableStateOf(0f) }
     var swipeHapticTriggered by remember(user.id) { mutableStateOf(false) }
+    var nicknameDialogVisible by remember(user.id) { mutableStateOf(false) }
+    var nicknameDraft by remember(user.id) { mutableStateOf(user.nickname) }
+    val nicknameDialogTitle = if (isRussian) "Локальный никнейм" else "Local nickname"
+    val nicknameDialogHint = if (isRussian) {
+        "Имя меняется только для вас. Оставьте поле пустым, чтобы вернуть исходный ник."
+    } else {
+        "This name changes only for you. Leave the field empty to restore the original nickname."
+    }
+    val canSaveNickname = nicknameDraft.trim().isBlank() || nicknameDraft.trim().length >= 2
     BackHandler(onBack = onClose)
     Box(
         modifier = Modifier
@@ -4284,7 +4301,18 @@ private fun ContactProfileScreen(
                         )
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(user.nickname, style = MaterialTheme.typography.headlineMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(user.nickname, style = MaterialTheme.typography.headlineMedium)
+                            FilledIconButton(
+                                onClick = {
+                                    nicknameDraft = user.nickname
+                                    nicknameDialogVisible = true
+                                },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(Icons.Outlined.Edit, contentDescription = nicknameDialogTitle, modifier = Modifier.size(18.dp))
+                            }
+                        }
                         Text(user.username, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Surface(
@@ -4313,7 +4341,45 @@ private fun ContactProfileScreen(
                 }
             }
         }
-    }
+            if (nicknameDialogVisible) {
+                AlertDialog(
+                    onDismissRequest = { nicknameDialogVisible = false },
+                    title = { Text(nicknameDialogTitle) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedTextField(
+                                value = nicknameDraft,
+                                onValueChange = { nicknameDraft = it },
+                                label = { Text(strings.nickname) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                nicknameDialogHint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                onSaveNickname(nicknameDraft)
+                                nicknameDialogVisible = false
+                            },
+                            enabled = canSaveNickname,
+                        ) {
+                            Text(strings.save)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { nicknameDialogVisible = false }) {
+                            Text(strings.cancel)
+                        }
+                    },
+                )
+            }
+        }
     }
 }
 
