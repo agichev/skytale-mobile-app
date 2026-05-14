@@ -1,0 +1,12 @@
+Skytale Mobile Public
+Copyright (c) Skytale Group.
+
+Source provenance: this repository is an authorized public source publication of the Skytale Android mobile client only.
+
+The backend server, deployment code, production configuration, release signing assets, and other non-mobile components are not included in this repository and remain outside the scope of this publication.
+
+Required attribution for any authorized reuse or redistribution must preserve:
+
+1. The project name "Skytale" or another attribution line approved by the rightsholder.
+2. A visible reference to the original source publication.
+3. This NOTICE file and the LICENSE file.

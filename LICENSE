@@ -1,0 +1,71 @@
+Skytale Mobile Public Source License 1.0
+
+Copyright (c) Skytale Group.
+All rights reserved.
+
+This license applies only to the contents of this repository.
+
+1. Definitions
+
+"Licensor" means the copyright holder or the party authorized to grant rights in this repository.
+
+"Source Code" means the human-readable code, assets, and documentation made available in this repository.
+
+"You" means any individual or legal entity exercising rights under this license.
+
+2. Limited Permission Granted Without Separate Approval
+
+Subject to this license, You may:
+
+- access, download, view, and study the Source Code;
+- perform independent security review, static analysis, reverse engineering, and interoperability analysis;
+- compile and run the Source Code for evaluation, testing, auditing, or internal review;
+- create and submit patches, suggestions, and security reports to the Licensor.
+
+3. Uses Requiring Prior Written Permission
+
+You may not, without prior written permission from the Licensor:
+
+- use the Source Code or any substantial portion of it in production;
+- deploy it for end users;
+- commercialize it;
+- sublicense it;
+- redistribute modified or unmodified copies, except as strictly required for private review by Your employees or retained security auditors under confidentiality obligations;
+- incorporate it into another software product, service, SDK, framework, or template.
+
+4. Attribution and Source Notice
+
+If the Licensor grants You written permission to redistribute, deploy, or incorporate this code, You must:
+
+- provide clear attribution to the original Skytale source publication;
+- preserve copyright, license, and notice files;
+- state that Your work includes material derived from Skytale;
+- identify material changes You made.
+
+5. Copyleft Condition for Any Authorized Redistribution
+
+If the Licensor grants You written permission to redistribute or publish a derivative work based on this Source Code, You must make the complete corresponding source code of that derivative work available under this same license, including Your modifications, build instructions, and any interface code required to run the modified mobile client.
+
+6. Independent Analysis Explicitly Permitted
+
+For the avoidance of doubt, independent code review, vulnerability research, benchmarking, decompilation for analysis, and publication of analytical findings are permitted, provided that You do not publish substantial portions of the Source Code beyond what is reasonably necessary for commentary, research, or fair quotation under applicable law.
+
+7. No Trademark License
+
+This license does not grant any right to use the Licensor's trademarks, service marks, trade dress, or logos except for nominative attribution required by this license.
+
+8. Reservation of Rights
+
+No rights are granted by implication, estoppel, or otherwise. All rights not expressly granted are reserved by the Licensor.
+
+9. Termination
+
+Any use inconsistent with this license automatically terminates the rights granted to You under Section 2.
+
+10. Disclaimer
+
+THE SOURCE CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+11. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM OR IN CONNECTION WITH THE SOURCE CODE OR THIS LICENSE.
