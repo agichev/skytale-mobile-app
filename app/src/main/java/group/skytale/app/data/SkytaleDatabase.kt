@@ -3,6 +3,7 @@ package group.skytale.app.data
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -86,6 +87,12 @@ data class FeedPostEntity(
     val icon: String,
     val accent: String,
     val createdAt: Long,
+)
+
+@Entity(tableName = "user_nickname_overrides", indices = [Index(value = ["userId"])])
+data class UserNicknameOverrideEntity(
+    @PrimaryKey val userId: String,
+    val displayName: String,
 )
 
 @Dao
@@ -172,9 +179,27 @@ interface FeedDao {
     suspend fun upsertAll(items: List<FeedPostEntity>)
 }
 
+@Dao
+interface UserNicknameOverrideDao {
+    @Query("SELECT * FROM user_nickname_overrides WHERE userId = :userId LIMIT 1")
+    suspend fun getByUserId(userId: String): UserNicknameOverrideEntity?
+
+    @Query("SELECT * FROM user_nickname_overrides")
+    suspend fun getAll(): List<UserNicknameOverrideEntity>
+
+    @Query("SELECT * FROM user_nickname_overrides")
+    fun observeAllOverrides(): Flow<List<UserNicknameOverrideEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: UserNicknameOverrideEntity)
+
+    @Query("DELETE FROM user_nickname_overrides WHERE userId = :userId")
+    suspend fun deleteByUserId(userId: String)
+}
+
 @Database(
-    entities = [ContactEntity::class, ChatEntity::class, MessageEntity::class, FeedPostEntity::class],
-    version = 2,
+    entities = [ContactEntity::class, ChatEntity::class, MessageEntity::class, FeedPostEntity::class, UserNicknameOverrideEntity::class],
+    version = 3,
     exportSchema = false,
 )
 abstract class SkytaleDatabase : RoomDatabase() {
@@ -182,4 +207,5 @@ abstract class SkytaleDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
     abstract fun messageDao(): MessageDao
     abstract fun feedDao(): FeedDao
+    abstract fun userNicknameOverrideDao(): UserNicknameOverrideDao
 }
