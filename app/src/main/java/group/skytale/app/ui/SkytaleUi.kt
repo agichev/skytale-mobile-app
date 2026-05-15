@@ -1,10 +1,13 @@
-package group.skytale.app.ui
+﻿package group.skytale.app.ui
 
 import android.app.Activity
 import android.Manifest
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.media.MediaPlayer
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -12,6 +15,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.text.format.DateUtils
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
@@ -46,6 +50,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.gestures.transformable
@@ -104,6 +109,7 @@ import androidx.compose.material.icons.outlined.MarkChatUnread
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
@@ -161,6 +167,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -202,6 +209,7 @@ import group.skytale.app.SoundEffect
 import group.skytale.app.data.ThemeMode
 import coil.compose.AsyncImage
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1606,12 +1614,12 @@ private fun ChatScreen(
     var backSwipeHapticTriggered by remember(state.openedChatId) { mutableStateOf(false) }
     var attachmentMenuExpanded by remember(state.openedChatId) { mutableStateOf(false) }
     var pendingCameraUri by remember(state.openedChatId) { mutableStateOf<Uri?>(null) }
-    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let {
+    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
+        uris.forEach { uri ->
             onSelectComposerMedia(
-                it.toString(),
-                context.resolveDisplayName(it),
-                context.contentResolver.getType(it).orEmpty(),
+                uri.toString(),
+                context.resolveDisplayName(uri),
+                context.contentResolver.getType(uri).orEmpty(),
             )
         }
     }
@@ -1668,6 +1676,7 @@ private fun ChatScreen(
     }
     val requestCameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
+            (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
             openSystemCamera()
         } else {
             Toast.makeText(
@@ -1757,8 +1766,8 @@ private fun ChatScreen(
             listState.scrollToItem(bottomIndex)
         }
     }
-    LaunchedEffect(state.selectedComposerMedia?.uri) {
-        if (state.selectedComposerMedia == null) {
+    LaunchedEffect(state.selectedComposerMedia.isEmpty()) {
+        if (state.selectedComposerMedia.isEmpty()) {
             composerMediaOptionsVisible = false
         }
     }
@@ -2115,9 +2124,9 @@ private fun ChatScreen(
                 verticalAlignment = Alignment.Bottom,
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AnimatedVisibility(visible = state.selectedComposerMedia != null) {
+                    AnimatedVisibility(visible = state.selectedComposerMedia.isNotEmpty()) {
                         SelectedMediaComposer(
-                            selection = state.selectedComposerMedia,
+                            selections = state.selectedComposerMedia,
                             hapticsEnabled = state.settings.hapticsEnabled,
                             onRemove = onClearComposerMedia,
                             onLongPress = { composerMediaOptionsVisible = true },
@@ -2182,15 +2191,13 @@ private fun ChatScreen(
                                 ) {
                                     DropdownMenuItem(
                                         leadingIcon = {
-                                            Icon(
-                                                painter = painterResource(R.drawable.ic_attach_camera),
-                                                contentDescription = null,
-                                            )
+                                            Icon(Icons.Outlined.PhotoCamera, contentDescription = null)
                                         },
                                         text = { Text("Сделать фото") },
                                         onClick = {
                                             attachmentMenuExpanded = false
                                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                                (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
                                                 openSystemCamera()
                                             } else {
                                                 requestCameraPermission.launch(Manifest.permission.CAMERA)
@@ -2207,6 +2214,7 @@ private fun ChatScreen(
                                         text = { Text("Выбрать фото") },
                                         onClick = {
                                             attachmentMenuExpanded = false
+                                            (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
                                             mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                                         },
                                     )
@@ -2218,7 +2226,7 @@ private fun ChatScreen(
                 Spacer(Modifier.width(12.dp))
                 FilledIconButton(
                     onClick = {
-                        if (draft.isNotBlank() || state.selectedComposerMedia != null) {
+                        if (draft.isNotBlank() || state.selectedComposerMedia.isNotEmpty()) {
                             onSendMessage(draft.trim())
                             draft = ""
                             onTypingChanged(false)
@@ -2296,10 +2304,11 @@ private fun ChatScreen(
             )
         }
     }
-    if (composerMediaOptionsVisible && state.selectedComposerMedia != null) {
+    if (composerMediaOptionsVisible && state.selectedComposerMedia.isNotEmpty()) {
         AttachmentOptionsDialog(
             strings = strings,
-            selection = state.selectedComposerMedia,
+            selection = state.selectedComposerMedia.first(),
+            selectedCount = state.selectedComposerMedia.size,
             onDismiss = { composerMediaOptionsVisible = false },
             onOptionsChanged = onUpdateComposerMediaOptions,
         )
@@ -2612,9 +2621,9 @@ private fun InfoTab(strings: SkytaleStrings) {
     val supportButton = if (isRussian) "Поддержать" else "Support"
     val changelogTitle = if (isRussian) "Changelog установленной версии" else "Installed version changelog"
     val changelogBody = if (isRussian) {
-        "Версия ${BuildConfig.VERSION_NAME}\n• Добавлены локальные никнеймы для контактов: теперь можно переименовать человека только для себя.\n• Новый карандаш в профиле собеседника открывает модалку с сохранением персонального имени.\n• Локальное имя подставляется в чатах, профилях, списке контактов и сообщениях."
+        "Версия ${BuildConfig.VERSION_NAME}\n• Прочтение и статусы сообщений обновляются заметно быстрее и локально без тяжёлого полного рефреша.\n• Уведомления теперь ведут в нужный чат, умеют быстрый ответ, накапливаются корректно и лучше работают в фоне.\n• Добавлен выбор нескольких изображений за раз, исправлены проблемы app lock при выборе фото и обновлён поток загрузки аватарки с кропом.\n• Исправлено дублирование звука уведомлений в фоне и улучшен вид блока с несколькими вложениями."
     } else {
-        "Version ${BuildConfig.VERSION_NAME}\n• Added local nicknames for contacts so you can rename someone only for yourself.\n• A new pencil button in the contact profile opens a modal for saving a personal name.\n• Local names now appear across chats, profiles, contacts, and message history."
+        "Version ${BuildConfig.VERSION_NAME}\n• Read states and message status indicators now update much faster with local targeted refreshes.\n• Notifications now open the right chat, support quick reply, accumulate correctly, and behave better in background delivery.\n• Added multi-image picking, fixed app-lock issues around media selection, and refreshed the avatar flow with crop-first upload.\n• Fixed duplicate notification sound in background and improved the composer layout for multiple attachments."
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -3651,12 +3660,13 @@ private fun ProfileTab(
 ) {
     val context = LocalContext.current
     val view = LocalView.current
+    var pendingAvatarCrop by remember { mutableStateOf<group.skytale.app.DraftMediaSelection?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let {
-            onSelectProfileAvatar(
-                it.toString(),
-                context.resolveDisplayName(it),
-                context.contentResolver.getType(it).orEmpty(),
+            pendingAvatarCrop = group.skytale.app.DraftMediaSelection(
+                uri = it.toString(),
+                fileName = context.resolveDisplayName(it),
+                mimeType = context.contentResolver.getType(it).orEmpty(),
             )
         }
     }
@@ -3683,6 +3693,7 @@ private fun ProfileTab(
                                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), CircleShape)
                                 .combinedClickable(
                                     onClick = {
+                                        (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
                                         avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                                     },
                                     onLongClick = {
@@ -3737,6 +3748,184 @@ private fun ProfileTab(
             }
         }
     }
+    pendingAvatarCrop?.let { selection ->
+        AvatarCropDialog(
+            selection = selection,
+            onDismiss = { pendingAvatarCrop = null },
+            onConfirm = { croppedUri, fileName, mimeType ->
+                pendingAvatarCrop = null
+                onSelectProfileAvatar(croppedUri, fileName, mimeType)
+            },
+        )
+    }
+}
+
+@Composable
+private fun AvatarCropDialog(
+    selection: group.skytale.app.DraftMediaSelection,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, String) -> Unit,
+) {
+    val context = LocalContext.current
+    val strings = LocalSkytaleStrings.current
+    val density = LocalDensity.current
+    val bitmap by produceState<Bitmap?>(initialValue = null, key1 = selection.uri) {
+        value = runCatching { context.loadBitmapForCropping(Uri.parse(selection.uri)) }.getOrNull()
+    }
+    var zoom by remember(selection.uri) { mutableStateOf(1f) }
+    var offsetX by remember(selection.uri) { mutableStateOf(0f) }
+    var offsetY by remember(selection.uri) { mutableStateOf(0f) }
+    val cropSize = 280.dp
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text("Обрезка аватарки", style = MaterialTheme.typography.titleLarge)
+                if (bitmap == null) {
+                    Box(modifier = Modifier.fillMaxWidth().height(cropSize), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    val sourceBitmap = bitmap!!
+                    val cropSizePx = with(density) { cropSize.toPx() }
+                    val baseScale = maxOf(
+                        cropSizePx / sourceBitmap.width.toFloat(),
+                        cropSizePx / sourceBitmap.height.toFloat(),
+                    )
+                    val displayWidth = sourceBitmap.width * baseScale
+                    val displayHeight = sourceBitmap.height * baseScale
+                    val scaledWidth = displayWidth * zoom
+                    val scaledHeight = displayHeight * zoom
+                    val maxOffsetX = ((scaledWidth - cropSizePx) / 2f).coerceAtLeast(0f)
+                    val maxOffsetY = ((scaledHeight - cropSizePx) / 2f).coerceAtLeast(0f)
+                    offsetX = offsetX.coerceIn(-maxOffsetX, maxOffsetX)
+                    offsetY = offsetY.coerceIn(-maxOffsetY, maxOffsetY)
+                    Box(
+                        modifier = Modifier
+                            .size(cropSize)
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(Color.Black.copy(alpha = 0.9f))
+                            .pointerInput(selection.uri) {
+                                detectTransformGestures { _, pan, gestureZoom, _ ->
+                                    val updatedZoom = (zoom * gestureZoom).coerceIn(1f, 4f)
+                                    val updatedScale = baseScale * updatedZoom
+                                    val updatedWidth = sourceBitmap.width * updatedScale
+                                    val updatedHeight = sourceBitmap.height * updatedScale
+                                    val updatedMaxOffsetX = ((updatedWidth - cropSizePx) / 2f).coerceAtLeast(0f)
+                                    val updatedMaxOffsetY = ((updatedHeight - cropSizePx) / 2f).coerceAtLeast(0f)
+                                    zoom = updatedZoom
+                                    offsetX = (offsetX + pan.x).coerceIn(-updatedMaxOffsetX, updatedMaxOffsetX)
+                                    offsetY = (offsetY + pan.y).coerceIn(-updatedMaxOffsetY, updatedMaxOffsetY)
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Image(
+                            bitmap = sourceBitmap.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(
+                                    with(density) { displayWidth.toDp() },
+                                    with(density) { displayHeight.toDp() },
+                                )
+                                .graphicsLayer {
+                                    scaleX = zoom
+                                    scaleY = zoom
+                                    translationX = offsetX
+                                    translationY = offsetY
+                                },
+                            contentScale = ContentScale.FillBounds,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .border(2.dp, Color.White.copy(alpha = 0.92f), RoundedCornerShape(28.dp)),
+                        )
+                    }
+                    Text(
+                        "Потяните и увеличьте изображение, чтобы выбрать область.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text(strings.cancel) }
+                    TextButton(
+                        enabled = bitmap != null,
+                        onClick = {
+                            val sourceBitmap = bitmap ?: return@TextButton
+                            val cropSizePx = with(density) { cropSize.toPx() }
+                            val scale = maxOf(
+                                cropSizePx / sourceBitmap.width.toFloat(),
+                                cropSizePx / sourceBitmap.height.toFloat(),
+                            ) * zoom
+                            val cropped = cropSquareBitmap(sourceBitmap, cropSizePx, scale, offsetX, offsetY)
+                            val saved = context.saveCroppedAvatar(selection.fileName, cropped)
+                            cropped.recycle()
+                            if (saved != null) {
+                                onConfirm(saved.first.toString(), saved.second, saved.third)
+                            } else {
+                                Toast.makeText(context, "Не удалось подготовить аватарку", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    ) { Text(strings.save) }
+                }
+            }
+        }
+    }
+}
+
+private fun Context.loadBitmapForCropping(uri: Uri): Bitmap {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(contentResolver, uri)) { decoder, _, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+    } else {
+        contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+            ?: error("Unable to decode image")
+    }
+}
+
+private fun cropSquareBitmap(
+    bitmap: Bitmap,
+    cropSizePx: Float,
+    scale: Float,
+    offsetX: Float,
+    offsetY: Float,
+): Bitmap {
+    val sourceSize = (cropSizePx / scale).coerceAtMost(minOf(bitmap.width, bitmap.height).toFloat())
+    val left = (((bitmap.width - sourceSize) / 2f) - (offsetX / scale))
+        .coerceIn(0f, (bitmap.width - sourceSize).coerceAtLeast(0f))
+    val top = (((bitmap.height - sourceSize) / 2f) - (offsetY / scale))
+        .coerceIn(0f, (bitmap.height - sourceSize).coerceAtLeast(0f))
+    val size = sourceSize.roundToInt()
+        .coerceAtLeast(1)
+        .coerceAtMost(bitmap.width - left.roundToInt())
+        .coerceAtMost(bitmap.height - top.roundToInt())
+    return Bitmap.createBitmap(bitmap, left.roundToInt(), top.roundToInt(), size, size)
+}
+
+private fun Context.saveCroppedAvatar(
+    originalFileName: String,
+    bitmap: Bitmap,
+): Triple<Uri, String, String>? {
+    return runCatching {
+        val directory = File(cacheDir, "camera").apply { mkdirs() }
+        val mimeType = if (bitmap.hasAlpha()) "image/png" else "image/jpeg"
+        val extension = if (bitmap.hasAlpha()) "png" else "jpg"
+        val fileBase = originalFileName.substringBeforeLast('.').ifBlank { "avatar" }
+        val outputFile = File(directory, "$fileBase-cropped-${System.currentTimeMillis()}.$extension")
+        FileOutputStream(outputFile).use { stream ->
+            bitmap.compress(if (bitmap.hasAlpha()) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 96, stream)
+        }
+        Triple(
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", outputFile),
+            outputFile.name,
+            mimeType,
+        )
+    }.getOrNull()
 }
 
 @Composable
@@ -3800,7 +3989,7 @@ private fun ChatImageAttachment(
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun SelectedMediaComposer(
-    selection: group.skytale.app.DraftMediaSelection?,
+    selections: List<group.skytale.app.DraftMediaSelection>,
     hapticsEnabled: Boolean,
     onRemove: () -> Unit,
     onLongPress: () -> Unit,
@@ -3824,16 +4013,39 @@ private fun SelectedMediaComposer(
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AsyncImage(
-                model = selection?.uri,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(RoundedCornerShape(18.dp)),
-                contentScale = ContentScale.Crop,
-            )
+            Box {
+                AsyncImage(
+                    model = selections.firstOrNull()?.uri,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(18.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+                if (selections.size > 1) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .background(Color.Black.copy(alpha = 0.66f), RoundedCornerShape(999.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            "+${selections.size - 1}",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.width(12.dp))
-            Text(strings.imageReady, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                if (selections.size == 1) strings.imageReady else "${strings.imageReady} (${selections.size})",
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
             IconButton(onClick = onRemove) {
                 Icon(Icons.Outlined.Close, contentDescription = null)
             }
@@ -3845,6 +4057,7 @@ private fun SelectedMediaComposer(
 private fun AttachmentOptionsDialog(
     strings: SkytaleStrings,
     selection: group.skytale.app.DraftMediaSelection,
+    selectedCount: Int,
     onDismiss: () -> Unit,
     onOptionsChanged: (Boolean, Boolean) -> Unit,
 ) {
@@ -3855,6 +4068,13 @@ private fun AttachmentOptionsDialog(
         title = { Text(strings.mediaOptions) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                if (selectedCount > 1) {
+                    Text(
+                        "Настройки будут применены ко всем $selectedCount изображениям",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 SettingToggle(
                     title = strings.sendWithoutCompression,
                     checked = !compress,

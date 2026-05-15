@@ -38,6 +38,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
+import group.skytale.app.sync.SkytaleNotificationManager
 
 class AppGraph(context: Context) {
     private val appContext = context.applicationContext
@@ -101,6 +102,7 @@ class SkytaleRepository(
     private val feed = database.feedDao()
 
     private val activeChatState = MutableStateFlow<String?>(null)
+    private val appForegroundState = MutableStateFlow(false)
     private val typingState = MutableStateFlow<Map<String, String>>(emptyMap())
     private val incomingAlertEvents = MutableSharedFlow<IncomingAlert>(extraBufferCapacity = 8)
     private val realtimeClient = OkHttpClient.Builder()
@@ -119,7 +121,7 @@ class SkytaleRepository(
 
     fun observeContacts(): Flow<List<ContactModel>> = combine(
         contacts.observeAll(),
-        database.userNicknameOverrideDao().observeAllOverrides(),
+        database.userNicknameOverrideDao().observeAllOverrides()
     ) { list, overrides ->
         val overrideMap = overrides.associateBy { it.userId }
         list.map {
@@ -150,18 +152,21 @@ class SkytaleRepository(
     fun observeChats(): Flow<List<ChatModel>> = combine(
         chats.observeAll(),
         settingsFlow,
-        database.userNicknameOverrideDao().observeAllOverrides(),
+        database.userNicknameOverrideDao().observeAllOverrides()
     ) { list, settings, overrides ->
         val overrideMap = overrides.associateBy { it.userId }
         list.filter { settings.showArchivedChats || !it.isArchived }.map { entity ->
             val model = entity.toModel(deviceCrypto)
-            val peer = model.peer
-            val overriddenNickname = peer?.let { overrideMap[it.id]?.displayName }
-            if (peer != null && overriddenNickname != null) {
-                model.copy(
-                    title = overriddenNickname,
-                    peer = peer.copy(nickname = overriddenNickname),
-                )
+            if (model.peer != null) {
+                val overriddenNickname = overrideMap[model.peer.id]?.displayName
+                if (overriddenNickname != null) {
+                    model.copy(
+                        title = overriddenNickname,
+                        peer = model.peer.copy(nickname = overriddenNickname),
+                    )
+                } else {
+                    model
+                }
             } else {
                 model
             }
@@ -183,7 +188,7 @@ class SkytaleRepository(
 
     fun observeMessages(chatId: String, currentUserId: String): Flow<List<MessageModel>> = combine(
         messages.observeByChat(chatId),
-        database.userNicknameOverrideDao().observeAllOverrides(),
+        database.userNicknameOverrideDao().observeAllOverrides()
     ) { list, overrides ->
         val overrideMap = overrides.associateBy { it.userId }
         list.map {
@@ -495,21 +500,21 @@ class SkytaleRepository(
         val currentUserId = secureStore.currentSession?.userId.orEmpty()
         return applyNicknameOverrides(
             api.searchMessages(chatId, query).map { dto ->
-            val entity = dto.toEntity(deviceCrypto)
-            MessageModel(
-                id = entity.id,
-                chatId = entity.chatId,
-                senderId = entity.senderId,
-                senderName = entity.senderName,
-                text = deviceCrypto.decrypt(entity.bodyCiphertext),
-                media = entity.toMediaModel(),
-                replyToId = entity.replyToId,
-                createdAt = entity.createdAt,
-                editedAt = entity.editedAt,
-                deletedAt = entity.deletedAt,
-                status = entity.status,
-                isOwn = entity.senderId == currentUserId,
-            )
+                val entity = dto.toEntity(deviceCrypto)
+                MessageModel(
+                    id = entity.id,
+                    chatId = entity.chatId,
+                    senderId = entity.senderId,
+                    senderName = entity.senderName,
+                    text = deviceCrypto.decrypt(entity.bodyCiphertext),
+                    media = entity.toMediaModel(),
+                    replyToId = entity.replyToId,
+                    createdAt = entity.createdAt,
+                    editedAt = entity.editedAt,
+                    deletedAt = entity.deletedAt,
+                    status = entity.status,
+                    isOwn = entity.senderId == currentUserId,
+                )
             },
         )
     }
@@ -537,9 +542,15 @@ class SkytaleRepository(
         api.markUnread(chatId, EnabledRequest(enabled))
     }
 
-    suspend fun markRead(chatId: String) {
-        runCatching { api.markRead(chatId) }
+    suspend fun markRead(chatId: String, notificationContext: Context? = null) {
         chats.markReadLocally(chatId)
+        runCatching { api.markRead(chatId) }
+        notificationContext?.let { SkytaleNotificationManager.cancelChatNotifications(it, chatId) }
+    }
+
+    suspend fun markReadLocally(chatId: String, notificationContext: Context? = null) {
+        chats.markReadLocally(chatId)
+        notificationContext?.let { SkytaleNotificationManager.cancelChatNotifications(it, chatId) }
     }
 
     suspend fun setTyping(chatId: String, isTyping: Boolean) {
@@ -551,6 +562,10 @@ class SkytaleRepository(
         if (chatId != null) {
             typingState.value = typingState.value - chatId
         }
+    }
+
+    fun setAppForeground(isForeground: Boolean) {
+        appForegroundState.value = isForeground
     }
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
@@ -606,18 +621,25 @@ class SkytaleRepository(
             "message.created" -> {
                 val message = json.decodeFromJsonElement<ApiMessage>(envelope.data)
                 messages.upsert(message.toEntity(deviceCrypto))
-                if (activeChatState.value == message.chatId && message.senderId != secureStore.currentSession?.userId && secureStore.currentSession?.lastSeenVisibility != "ghost") {
+                val session = secureStore.currentSession
+                val activeChatVisible = appForegroundState.value && activeChatState.value == message.chatId
+                if (activeChatVisible && message.senderId != session?.userId && session?.lastSeenVisibility != "ghost") {
                     runCatching { api.markRead(message.chatId) }
                     chats.markReadLocally(message.chatId)
+                    return null
                 }
                 updateChatPreviewLocally(message)
-                val session = secureStore.currentSession
-                if (session != null && message.senderId != session.userId && activeChatState.value != message.chatId) {
+                if (session != null && message.senderId != session.userId && !activeChatVisible) {
                     val chat = chats.getById(message.chatId)
                     IncomingAlert(
+                        messageId = message.id,
                         chatId = message.chatId,
                         title = resolveNotificationTitle(chat, message),
                         body = message.text.ifBlank { if (message.media != null) "Image" else "" },
+                        senderName = message.sender?.nickname ?: message.sender?.username ?: resolveNotificationTitle(chat, message),
+                        senderAvatarUrl = message.sender?.avatarThumbUrl?.ifBlank { message.sender?.avatarUrl }.orEmpty(),
+                        conversationAvatarUrl = chat?.peerAvatarThumbUrl?.ifBlank { chat.peerAvatarUrl }.orEmpty(),
+                        isGroupConversation = chat?.type != "direct",
                     ).also { incomingAlertEvents.tryEmit(it) }
                 } else {
                     null
@@ -663,11 +685,44 @@ class SkytaleRepository(
                 null
             }
             "chat.read" -> {
-                refreshChats()
+                val payload = json.decodeFromJsonElement<ChatReadEvent>(envelope.data)
+                val currentUserId = secureStore.currentSession?.userId.orEmpty()
+                if (payload.chatId.isBlank()) {
+                    refreshChats()
+                } else if (payload.userId == currentUserId || payload.userId.isBlank()) {
+                    chats.markReadLocally(payload.chatId)
+                } else if (currentUserId.isNotBlank()) {
+                    messages.markMessagesReadBySender(payload.chatId, currentUserId)
+                    chats.markLastMessageRead(payload.chatId, currentUserId)
+                }
                 null
             }
             else -> null
         }
+    }
+
+    suspend fun buildNotificationConversation(chatId: String, limit: Int = 6): NotificationConversation? {
+        val chat = chats.getById(chatId) ?: return null
+        val currentUserId = secureStore.currentSession?.userId.orEmpty()
+        val recentMessages = messages.latestByChat(chatId, limit).asReversed().map { entity ->
+            NotificationMessage(
+                id = entity.id,
+                senderName = entity.senderName,
+                body = deviceCrypto.decrypt(entity.bodyCiphertext).ifBlank {
+                    if (entity.mediaUrl.isNotBlank()) "[Image]" else ""
+                },
+                sentAtMillis = entity.createdAt * 1000L,
+                isOwn = entity.senderId == currentUserId,
+            )
+        }
+        return NotificationConversation(
+            chatId = chatId,
+            title = chat.title,
+            conversationAvatarUrl = chat.peerAvatarThumbUrl?.ifBlank { chat.peerAvatarUrl }.orEmpty(),
+            senderAvatarUrl = chat.peerAvatarThumbUrl?.ifBlank { chat.peerAvatarUrl }.orEmpty(),
+            isGroupConversation = chat.type != "direct",
+            messages = recentMessages,
+        )
     }
 
     private suspend fun applyBootstrap(bootstrap: ApiBootstrap, token: String) {

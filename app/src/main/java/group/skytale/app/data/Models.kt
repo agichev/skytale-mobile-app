@@ -172,7 +172,31 @@ data class SearchUserModel(
 
 @Immutable
 data class IncomingAlert(
+    val messageId: String,
     val chatId: String,
     val title: String,
     val body: String,
+    val senderName: String,
+    val senderAvatarUrl: String = "",
+    val conversationAvatarUrl: String = "",
+    val isGroupConversation: Boolean = false,
+)
+
+@Immutable
+data class NotificationMessage(
+    val id: String,
+    val senderName: String,
+    val body: String,
+    val sentAtMillis: Long,
+    val isOwn: Boolean,
+)
+
+@Immutable
+data class NotificationConversation(
+    val chatId: String,
+    val title: String,
+    val conversationAvatarUrl: String = "",
+    val senderAvatarUrl: String = "",
+    val isGroupConversation: Boolean = false,
+    val messages: List<NotificationMessage> = emptyList(),
 )

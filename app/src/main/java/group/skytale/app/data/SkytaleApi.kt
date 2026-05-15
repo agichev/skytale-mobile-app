@@ -145,6 +145,13 @@ data class TypingEvent(
     val isTyping: Boolean,
 )
 
+@Serializable
+data class ChatReadEvent(
+    val chatId: String = "",
+    val userId: String = "",
+    val readAt: Long = 0L,
+)
+
 interface SkytaleApi {
     @POST("auth/register")
     suspend fun register(@Body request: RegisterRequest): ApiAuthResponse

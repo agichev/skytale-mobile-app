@@ -61,7 +61,7 @@ data class SkytaleUiState(
     val messages: List<MessageModel> = emptyList(),
     val searchUsers: List<SearchUserModel> = emptyList(),
     val chatSearchResults: List<MessageModel> = emptyList(),
-    val selectedComposerMedia: DraftMediaSelection? = null,
+    val selectedComposerMedia: List<DraftMediaSelection> = emptyList(),
     val selectedProfileAvatar: DraftMediaSelection? = null,
     val removeProfileAvatar: Boolean = false,
     val pendingUploads: List<PendingMediaUpload> = emptyList(),
@@ -115,6 +115,8 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
 
     private var chatJob: Job? = null
     private val uploadJobs = linkedMapOf<String, Job>()
+    private var pendingIntentChatId: String? = null
+    private var appInForeground: Boolean = false
 
     init {
         viewModelScope.launch {
@@ -143,10 +145,15 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
                     restore()
                     ensureSyncService()
                     repository.startRealtime(viewModelScope)
+                    pendingIntentChatId?.let { chatId ->
+                        pendingIntentChatId = null
+                        openChat(chatId)
+                    }
                 } else {
                     state.value = state.value.copy(messages = emptyList(), openedChatId = null)
                     stopSyncService()
                     repository.stopRealtime()
+                    pendingIntentChatId = null
                 }
             }
         }
@@ -172,7 +179,7 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             repository.incomingAlerts.collect {
-                if (state.value.settings.soundEnabled) {
+                if (state.value.settings.soundEnabled && appInForeground) {
                     state.value = state.value.copy(
                         pendingSoundEvent = UiSoundEvent(SoundEffect.INCOMING),
                     )
@@ -253,23 +260,34 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectComposerMedia(uri: String, fileName: String, mimeType: String) {
         state.value = state.value.copy(
-            selectedComposerMedia = DraftMediaSelection(uri = uri, fileName = fileName, mimeType = mimeType),
+            selectedComposerMedia = state.value.selectedComposerMedia + DraftMediaSelection(uri = uri, fileName = fileName, mimeType = mimeType),
+            errorMessage = null,
+            offlineMessage = null,
+        )
+    }
+
+    fun selectComposerMediaBatch(items: List<DraftMediaSelection>) {
+        if (items.isEmpty()) return
+        state.value = state.value.copy(
+            selectedComposerMedia = state.value.selectedComposerMedia + items,
             errorMessage = null,
             offlineMessage = null,
         )
     }
 
     fun clearComposerMedia() {
-        state.value = state.value.copy(selectedComposerMedia = null)
+        state.value = state.value.copy(selectedComposerMedia = emptyList())
     }
 
     fun updateComposerMediaOptions(compressImage: Boolean, stripMetadata: Boolean) {
-        val media = state.value.selectedComposerMedia ?: return
+        if (state.value.selectedComposerMedia.isEmpty()) return
         state.value = state.value.copy(
-            selectedComposerMedia = media.copy(
-                compressImage = compressImage,
-                stripMetadata = if (compressImage) true else stripMetadata,
-            ),
+            selectedComposerMedia = state.value.selectedComposerMedia.map { media ->
+                media.copy(
+                    compressImage = compressImage,
+                    stripMetadata = if (compressImage) true else stripMetadata,
+                )
+            },
         )
     }
 
@@ -511,6 +529,11 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
             chatSearchQuery = "",
         )
         repository.setActiveChat(chatId)
+        if (state.value.lastSeenVisibility != "ghost") {
+            viewModelScope.launch {
+                repository.markRead(chatId, getApplication())
+            }
+        }
         chatJob?.cancel()
         val currentUserId = state.value.session?.userId.orEmpty()
         chatJob = viewModelScope.launch {
@@ -525,7 +548,7 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
                     chatId = chatId,
                     limit = 15,
                     replace = true,
-                    markRead = state.value.lastSeenVisibility != "ghost",
+                    markRead = false,
                 )
                 state.value = state.value.copy(hasMoreMessages = loaded >= 15)
             }.onFailure {
@@ -536,16 +559,37 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
 
     fun closeChat() {
         repository.setActiveChat(null)
-        state.value = state.value.copy(openedChatId = null, chatSearchResults = emptyList(), chatSearchQuery = "", replyToMessageId = null, selectedComposerMedia = null, chatInitialLoading = false)
+        state.value = state.value.copy(openedChatId = null, chatSearchResults = emptyList(), chatSearchQuery = "", replyToMessageId = null, selectedComposerMedia = emptyList(), chatInitialLoading = false)
+    }
+
+    fun handleNotificationChatIntent(chatId: String?) {
+        val normalized = chatId?.takeIf { it.isNotBlank() } ?: return
+        if (state.value.session != null) {
+            openChat(normalized)
+        } else {
+            pendingIntentChatId = normalized
+        }
+    }
+
+    fun setAppForeground(isForeground: Boolean) {
+        appInForeground = isForeground
+        repository.setAppForeground(isForeground)
+        val activeChatId = if (isForeground) state.value.openedChatId else null
+        repository.setActiveChat(activeChatId)
+        if (isForeground && activeChatId != null && state.value.lastSeenVisibility != "ghost") {
+            viewModelScope.launch {
+                repository.markRead(activeChatId, getApplication())
+            }
+        }
     }
 
     fun sendMessage(text: String) {
         val chatId = state.value.openedChatId ?: return
         val replyToId = state.value.replyToMessageId
-        val mediaSelection = state.value.selectedComposerMedia
+        val mediaSelections = state.value.selectedComposerMedia
         val trimmed = text.trim()
-        if (trimmed.isBlank() && mediaSelection == null) return
-        if (mediaSelection == null) {
+        if (trimmed.isBlank() && mediaSelections.isEmpty()) return
+        if (mediaSelections.isEmpty()) {
             viewModelScope.launch {
                 runCatching { repository.sendMessage(chatId, trimmed, replyToId) }
                     .onSuccess {
@@ -559,40 +603,50 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        val localId = UUID.randomUUID().toString()
-        state.value = state.value.copy(
-            selectedComposerMedia = null,
-            replyToMessageId = null,
-            pendingUploads = state.value.pendingUploads + PendingMediaUpload(
-                localId = localId,
+        val pendingUploads = mediaSelections.map { mediaSelection ->
+            PendingMediaUpload(
+                localId = UUID.randomUUID().toString(),
                 chatId = chatId,
                 localUri = mediaSelection.uri,
-            ),
+            )
+        }
+        state.value = state.value.copy(
+            selectedComposerMedia = emptyList(),
+            replyToMessageId = null,
+            pendingUploads = state.value.pendingUploads + pendingUploads,
         )
-        uploadJobs[localId] = viewModelScope.launch {
-            try {
-                val prepared = prepareImageUpload(mediaSelection)
-                val uploaded = repository.uploadImage(
-                    bytes = prepared.bytes,
-                    fileName = prepared.fileName,
-                    mimeType = prepared.mimeType,
-                    purpose = "chat",
-                ) { progress ->
-                    updatePendingUploadProgress(localId, progress)
+        pendingUploads.forEachIndexed { index, pending ->
+            val mediaSelection = mediaSelections[index]
+            uploadJobs[pending.localId] = viewModelScope.launch {
+                try {
+                    val prepared = prepareImageUpload(mediaSelection)
+                    val uploaded = repository.uploadImage(
+                        bytes = prepared.bytes,
+                        fileName = prepared.fileName,
+                        mimeType = prepared.mimeType,
+                        purpose = "chat",
+                    ) { progress ->
+                        updatePendingUploadProgress(pending.localId, progress)
+                    }
+                    repository.sendMessage(
+                        chatId = chatId,
+                        text = if (index == 0) trimmed else "",
+                        replyToId = if (index == 0) replyToId else null,
+                        media = uploaded,
+                    )
+                    if (state.value.settings.soundEnabled && index == 0) {
+                        state.value = state.value.copy(pendingSoundEvent = UiSoundEvent(SoundEffect.SENT))
+                    }
+                    removePendingUpload(pending.localId)
+                } catch (cancelled: CancellationException) {
+                    removePendingUpload(pending.localId)
+                    throw cancelled
+                } catch (throwable: Throwable) {
+                    removePendingUpload(pending.localId)
+                    publishError(throwable)
+                } finally {
+                    uploadJobs.remove(pending.localId)
                 }
-                repository.sendMessage(chatId, trimmed, replyToId, uploaded)
-                if (state.value.settings.soundEnabled) {
-                    state.value = state.value.copy(pendingSoundEvent = UiSoundEvent(SoundEffect.SENT))
-                }
-                removePendingUpload(localId)
-            } catch (cancelled: CancellationException) {
-                removePendingUpload(localId)
-                throw cancelled
-            } catch (throwable: Throwable) {
-                removePendingUpload(localId)
-                publishError(throwable)
-            } finally {
-                uploadJobs.remove(localId)
             }
         }
     }

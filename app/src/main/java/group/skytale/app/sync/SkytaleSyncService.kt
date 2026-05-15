@@ -5,17 +5,25 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
+import androidx.core.app.RemoteInput
+import androidx.core.graphics.drawable.IconCompat
 import group.skytale.app.BuildConfig
 import group.skytale.app.MainActivity
 import group.skytale.app.R
 import group.skytale.app.SkytaleApp
 import group.skytale.app.data.IncomingAlert
+import group.skytale.app.data.NotificationConversation
+import java.net.URL
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +61,10 @@ class SkytaleSyncService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(ONGOING_NOTIFICATION_ID, ongoingNotification())
+        if (intent?.action == ACTION_REPLY) {
+            serviceScope.launch { handleDirectReply(intent) }
+            return START_STICKY
+        }
         serviceScope.launch { connectLoop() }
         return START_STICKY
     }
@@ -121,29 +133,118 @@ class SkytaleSyncService : Service() {
             .build()
     }
 
-    private fun showIncomingNotification(alert: IncomingAlert) {
-        val intent = Intent(this, MainActivity::class.java).putExtra("chatId", alert.chatId)
+    private suspend fun showIncomingNotification(alert: IncomingAlert) {
+        val previewEnabled = secureStore.settingsFlow.value.previewsEnabled
+        val notificationText = if (previewEnabled) alert.body else "New message"
+        val conversation = repository.buildNotificationConversation(alert.chatId)
+        val intent = Intent(this, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_CHAT_ID, alert.chatId)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pendingIntent = PendingIntent.getActivity(
             this,
-            alert.chatId.hashCode(),
+            SkytaleNotificationManager.notificationIdForChat(alert.chatId),
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val replyPendingIntent = PendingIntent.getService(
+            this,
+            SkytaleNotificationManager.notificationIdForChat(alert.chatId),
+            Intent(this, SkytaleSyncService::class.java)
+                .setAction(ACTION_REPLY)
+                .putExtra(MainActivity.EXTRA_CHAT_ID, alert.chatId),
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val remoteInput = RemoteInput.Builder(KEY_REPLY_TEXT)
+            .setLabel("Reply")
+            .build()
+        val replyAction = NotificationCompat.Action.Builder(
+            R.drawable.ic_notification_logo,
+            "Reply",
+            replyPendingIntent,
+        ).addRemoteInput(remoteInput)
+            .setAllowGeneratedReplies(true)
+            .build()
+        val largeAvatar = loadBitmap(alert.conversationAvatarUrl.ifBlank { alert.senderAvatarUrl })
         val builder = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_notification_logo)
             .setContentTitle(alert.title)
-            .setContentText(
-                if (secureStore.settingsFlow.value.previewsEnabled) alert.body else "New message",
-            )
+            .setContentText(notificationText)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setOnlyAlertOnce(true)
+            .addAction(replyAction)
+            .setStyle(buildMessagingStyle(alert, conversation, previewEnabled))
+        if (largeAvatar != null) {
+            builder.setLargeIcon(largeAvatar)
+        }
         if (secureStore.settingsFlow.value.soundEnabled) {
             builder.setSound(android.net.Uri.parse("android.resource://$packageName/${R.raw.notification_sound_fx}"))
         }
-        NotificationManagerCompat.from(this).notify(alert.chatId.hashCode(), builder.build())
+        NotificationManagerCompat.from(this).notify(
+            SkytaleNotificationManager.notificationIdForChat(alert.chatId),
+            builder.build(),
+        )
+    }
+
+    private suspend fun handleDirectReply(intent: Intent) {
+        val chatId = intent.getStringExtra(MainActivity.EXTRA_CHAT_ID).orEmpty()
+        val replyText = RemoteInput.getResultsFromIntent(intent)
+            ?.getCharSequence(KEY_REPLY_TEXT)
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        if (chatId.isBlank() || replyText.isBlank()) return
+        runCatching {
+            repository.sendMessage(chatId, replyText)
+            SkytaleNotificationManager.cancelChatNotifications(this, chatId)
+        }
+    }
+
+    private fun buildMessagingStyle(
+        alert: IncomingAlert,
+        conversation: NotificationConversation?,
+        previewEnabled: Boolean,
+    ): NotificationCompat.MessagingStyle {
+        val title = conversation?.title ?: alert.title
+        val avatarBitmap = loadBitmap(alert.senderAvatarUrl.ifBlank { conversation?.senderAvatarUrl.orEmpty() })
+        val conversationPerson = Person.Builder()
+            .setName(title)
+            .apply {
+                avatarBitmap?.let { setIcon(IconCompat.createWithBitmap(it)) }
+            }
+            .build()
+        val style = NotificationCompat.MessagingStyle(conversationPerson)
+            .setGroupConversation(conversation?.isGroupConversation ?: alert.isGroupConversation)
+        if (conversation?.isGroupConversation == true) {
+            style.setConversationTitle(title)
+        }
+        val history = conversation?.messages ?: emptyList()
+        if (history.isEmpty()) {
+            style.addMessage(
+                if (previewEnabled) alert.body else "New message",
+                System.currentTimeMillis(),
+                Person.Builder().setName(alert.senderName).build(),
+            )
+            return style
+        }
+        history.forEach { message ->
+            style.addMessage(
+                if (previewEnabled) message.body else "New message",
+                message.sentAtMillis,
+                Person.Builder().setName(message.senderName).build(),
+            )
+        }
+        return style
+    }
+
+    private fun loadBitmap(url: String): Bitmap? {
+        if (url.isBlank()) return null
+        return runCatching {
+            val normalized = if (url.startsWith("http://") || url.startsWith("https://")) url else Uri.parse(url).toString()
+            URL(normalized).openStream().use(BitmapFactory::decodeStream)
+        }.getOrNull()
     }
 
     private fun createChannels() {
@@ -174,5 +275,7 @@ class SkytaleSyncService : Service() {
         private const val CHANNEL_BACKGROUND_SYNC = "skytale_background_sync"
         private const val CHANNEL_MESSAGES = "skytale_messages"
         private const val ONGOING_NOTIFICATION_ID = 11
+        private const val ACTION_REPLY = "group.skytale.app.ACTION_REPLY"
+        private const val KEY_REPLY_TEXT = "reply_text"
     }
 }

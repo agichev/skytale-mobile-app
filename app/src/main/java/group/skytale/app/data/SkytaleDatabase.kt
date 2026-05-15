@@ -133,6 +133,9 @@ interface ChatDao {
     @Query("UPDATE chats SET unreadCount = 0, isMarkedUnread = 0 WHERE id = :chatId")
     suspend fun markReadLocally(chatId: String)
 
+    @Query("UPDATE chats SET lastMessageStatus = 'read' WHERE id = :chatId AND lastMessageSenderId = :senderId")
+    suspend fun markLastMessageRead(chatId: String, senderId: String)
+
     @Query("UPDATE chats SET isPinned = :enabled, pinnedSort = :pinnedSort WHERE id = :chatId")
     suspend fun updatePinned(chatId: String, enabled: Boolean, pinnedSort: Long)
 
@@ -165,6 +168,9 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     suspend fun deleteForChat(chatId: String)
+
+    @Query("UPDATE messages SET status = 'read' WHERE chatId = :chatId AND senderId = :senderId AND status != 'read'")
+    suspend fun markMessagesReadBySender(chatId: String, senderId: String)
 }
 
 @Dao

@@ -1,6 +1,7 @@
 package group.skytale.app
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -56,6 +57,7 @@ import group.skytale.app.ui.stringsFor
 
 class MainActivity : FragmentActivity() {
     private val viewModel by viewModels<SkytaleViewModel>()
+    private var suppressNextRelock = false
 
     private val requestNotifications = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -66,6 +68,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        routeIntent(intent)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -87,6 +90,8 @@ class MainActivity : FragmentActivity() {
                         val observer = LifecycleEventObserver { _, event ->
                             when (event) {
                                 Lifecycle.Event.ON_START -> {
+                                    viewModel.setAppForeground(true)
+                                    suppressNextRelock = false
                                     if (shouldRequireUnlock && locked && relockOnForeground) {
                                         lockCycle += 1
                                         pendingRelock = false
@@ -98,12 +103,14 @@ class MainActivity : FragmentActivity() {
                                 }
 
                                 Lifecycle.Event.ON_STOP -> {
-                                    if (shouldRequireUnlock && !activity.isChangingConfigurations) {
+                                    viewModel.setAppForeground(false)
+                                    if (shouldRequireUnlock && !activity.isChangingConfigurations && !suppressNextRelock) {
                                         locked = true
                                         pendingRelock = true
                                         relockOnForeground = true
                                         unlockSatisfied = false
                                     }
+                                    suppressNextRelock = false
                                 }
 
                                 else -> Unit
@@ -210,6 +217,24 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        routeIntent(intent)
+    }
+
+    private fun routeIntent(intent: Intent?) {
+        viewModel.handleNotificationChatIntent(intent?.getStringExtra(EXTRA_CHAT_ID))
+    }
+
+    fun suppressRelockOnce() {
+        suppressNextRelock = true
+    }
+
+    companion object {
+        const val EXTRA_CHAT_ID = "chatId"
     }
 }
 
