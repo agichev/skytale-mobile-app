@@ -131,6 +131,12 @@ data class MessageModel(
     val deletedAt: Long,
     val status: String,
     val isOwn: Boolean,
+    val commentCount: Int = 0,
+    val viewCount: Int = 0,
+    val isPinned: Boolean = false,
+    val forwardedFromChatId: String = "",
+    val forwardedFromUsername: String = "",
+    val forwardedFromTitle: String = "",
 )
 
 @Immutable
@@ -139,6 +145,16 @@ data class ChatModel(
     val type: String,
     val title: String,
     val peer: UserModel?,
+    val username: String = "",
+    val description: String = "",
+    val avatarUrl: String = "",
+    val avatarThumbUrl: String = "",
+    val memberCount: Int = 0,
+    val canPost: Boolean = true,
+    val canManage: Boolean = false,
+    val postingPolicy: String = "admins",
+    val commentsEnabled: Boolean = true,
+    val pinnedPostId: String = "",
     val lastMessagePreview: String,
     val lastMessageCreatedAt: Long,
     val lastMessageSenderId: String?,
@@ -168,6 +184,27 @@ data class SearchUserModel(
     val nickname: String,
     val avatarThumbUrl: String = "",
     val isOnline: Boolean,
+)
+
+@Immutable
+data class DirectoryEntryModel(
+    val kind: String,
+    val id: String,
+    val username: String,
+    val title: String,
+    val description: String,
+    val avatarUrl: String = "",
+    val avatarThumbUrl: String = "",
+    val memberCount: Int = 0,
+    val isOnline: Boolean = false,
+)
+
+@Immutable
+data class ChannelMemberModel(
+    val user: UserModel,
+    val role: String,
+    val joinedAt: Long,
+    val isMuted: Boolean,
 )
 
 @Immutable

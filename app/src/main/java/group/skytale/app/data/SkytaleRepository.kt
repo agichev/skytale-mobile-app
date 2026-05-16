@@ -206,6 +206,42 @@ class SkytaleRepository(
                 deletedAt = it.deletedAt,
                 status = it.status,
                 isOwn = it.senderId == currentUserId,
+                commentCount = it.commentCount,
+                viewCount = it.viewCount,
+                isPinned = it.isPinned,
+                forwardedFromChatId = it.forwardedFromChatId,
+                forwardedFromUsername = it.forwardedFromUsername,
+                forwardedFromTitle = it.forwardedFromTitle,
+            )
+        }
+    }.flowOn(Dispatchers.Default).distinctUntilChanged()
+
+    fun observeChannelPosts(chatId: String, currentUserId: String): Flow<List<MessageModel>> = combine(
+        messages.observeRootByChat(chatId),
+        database.userNicknameOverrideDao().observeAllOverrides()
+    ) { list, overrides ->
+        val overrideMap = overrides.associateBy { it.userId }
+        list.map {
+            val senderName = overrideMap[it.senderId]?.displayName ?: it.senderName
+            MessageModel(
+                id = it.id,
+                chatId = it.chatId,
+                senderId = it.senderId,
+                senderName = senderName,
+                text = deviceCrypto.decrypt(it.bodyCiphertext),
+                media = it.toMediaModel(),
+                replyToId = it.replyToId,
+                createdAt = it.createdAt,
+                editedAt = it.editedAt,
+                deletedAt = it.deletedAt,
+                status = it.status,
+                isOwn = it.senderId == currentUserId,
+                commentCount = it.commentCount,
+                viewCount = it.viewCount,
+                isPinned = it.isPinned,
+                forwardedFromChatId = it.forwardedFromChatId,
+                forwardedFromUsername = it.forwardedFromUsername,
+                forwardedFromTitle = it.forwardedFromTitle,
             )
         }
     }.flowOn(Dispatchers.Default).distinctUntilChanged()
@@ -222,12 +258,15 @@ class SkytaleRepository(
                     text = deviceCrypto.decrypt(it.bodyCiphertext),
                     media = it.toMediaModel(),
                     replyToId = it.replyToId,
-                    createdAt = it.createdAt,
-                    editedAt = it.editedAt,
-                    deletedAt = it.deletedAt,
-                    status = it.status,
-                    isOwn = it.senderId == currentUserId,
-                )
+                createdAt = it.createdAt,
+                editedAt = it.editedAt,
+                deletedAt = it.deletedAt,
+                status = it.status,
+                isOwn = it.senderId == currentUserId,
+                commentCount = it.commentCount,
+                viewCount = it.viewCount,
+                isPinned = it.isPinned,
+            )
             }
             .let { applyNicknameOverrides(it) }
 
@@ -318,6 +357,150 @@ class SkytaleRepository(
         }
     }
 
+    suspend fun searchDirectory(query: String): List<DirectoryEntryModel> {
+        return api.searchDirectory(query).map {
+            DirectoryEntryModel(
+                kind = it.kind,
+                id = it.id,
+                username = it.username,
+                title = it.title,
+                description = it.description,
+                avatarUrl = it.avatarUrl,
+                avatarThumbUrl = it.avatarThumbUrl,
+                memberCount = it.memberCount,
+                isOnline = it.isOnline,
+            )
+        }
+    }
+
+    suspend fun createChannel(
+        title: String,
+        username: String,
+        description: String,
+        avatarUrl: String = "",
+        avatarThumbUrl: String = "",
+        postingPolicy: String = "admins",
+        commentsEnabled: Boolean = true,
+    ): String {
+        val created = api.createChannel(
+            CreateChannelRequest(
+                title = title,
+                username = username,
+                description = description,
+                avatarUrl = avatarUrl,
+                avatarThumbUrl = avatarThumbUrl,
+                postingPolicy = postingPolicy,
+                commentsEnabled = commentsEnabled,
+            ),
+        )
+        chats.upsert(created.toEntity(deviceCrypto))
+        refreshChats()
+        return created.id
+    }
+
+    suspend fun updateChannel(
+        chatId: String,
+        title: String,
+        username: String,
+        description: String,
+        avatarUrl: String = "",
+        avatarThumbUrl: String = "",
+        postingPolicy: String = "admins",
+        commentsEnabled: Boolean = true,
+    ) {
+        val updated = api.updateChannel(
+            chatId,
+            UpdateChannelRequest(
+                title = title,
+                username = username,
+                description = description,
+                avatarUrl = avatarUrl,
+                avatarThumbUrl = avatarThumbUrl,
+                postingPolicy = postingPolicy,
+                commentsEnabled = commentsEnabled,
+            ),
+        )
+        chats.upsert(updated.toEntity(deviceCrypto))
+        refreshChats()
+    }
+
+    suspend fun joinChannel(chatId: String) {
+        api.joinChannel(chatId)
+        refreshChats()
+    }
+
+    suspend fun leaveChannel(chatId: String) {
+        api.leaveChannel(chatId)
+        refreshChats()
+    }
+
+    suspend fun deleteChannel(chatId: String) {
+        api.deleteChannel(chatId)
+        refreshChats()
+    }
+
+    suspend fun channelMembers(chatId: String): List<ChannelMemberModel> {
+        return api.channelMembers(chatId).map {
+            ChannelMemberModel(
+                user = UserModel(
+                    id = it.user.id,
+                    username = it.user.username,
+                    nickname = it.user.nickname,
+                    about = it.user.about,
+                    language = AppLanguage.fromCode(it.user.language),
+                    avatarUrl = it.user.avatarUrl,
+                    avatarThumbUrl = it.user.avatarThumbUrl,
+                    createdAt = it.user.createdAt,
+                    lastSeenAt = it.user.lastSeenAt,
+                    isOnline = it.user.isOnline,
+                    lastSeenVisibility = it.user.lastSeenVisibility,
+                    usernameDiscoverable = it.user.usernameDiscoverable,
+                ),
+                role = it.role,
+                joinedAt = it.joinedAt,
+                isMuted = it.isMuted,
+            )
+        }
+    }
+
+    suspend fun setChannelRole(chatId: String, userId: String, role: String) {
+        api.setChannelRole(chatId, userId, SetChannelRoleRequest(role))
+        refreshChats()
+    }
+
+    suspend fun pinChannelPost(chatId: String, messageId: String?) {
+        api.pinChannelPost(chatId, PinChannelPostRequest(messageId.orEmpty()))
+        loadMessages(chatId = chatId, replace = true, markRead = false)
+        refreshChats()
+    }
+
+    suspend fun channelComments(chatId: String, messageId: String): List<MessageModel> {
+        val currentUserId = secureStore.currentSession?.userId.orEmpty()
+        return applyNicknameOverrides(
+            api.channelComments(chatId, messageId).map { dto -> dto.toModel(deviceCrypto, currentUserId) },
+        )
+    }
+
+    suspend fun createChannelComment(chatId: String, messageId: String, text: String): MessageModel {
+        val currentUserId = secureStore.currentSession?.userId.orEmpty()
+        val created = api.createChannelComment(chatId, messageId, CreateCommentRequest(text = text))
+        return created.toModel(deviceCrypto, currentUserId)
+    }
+
+    suspend fun resolvePublicUsername(username: String): DirectoryEntryModel? {
+        val profile = api.publicProfile(username)
+        return DirectoryEntryModel(
+            kind = profile.kind,
+            id = profile.id,
+            username = profile.username,
+            title = profile.title,
+            description = profile.description,
+            avatarUrl = profile.avatarUrl,
+            avatarThumbUrl = profile.avatarThumbUrl,
+            memberCount = profile.memberCount,
+        )
+    }
+
     suspend fun addContact(userId: String? = null, username: String? = null): String {
         val result = api.addContact(AddContactRequest(userId = userId, username = username))
         refreshContacts()
@@ -345,6 +528,9 @@ class SkytaleRepository(
     suspend fun refreshChats(query: String? = null) {
         val list = api.chats(query = query, archived = true)
         database.withTransaction {
+            if (query.isNullOrBlank()) {
+                chats.clear()
+            }
             chats.upsertAll(list.map { it.toEntity(deviceCrypto) })
         }
     }
@@ -399,8 +585,8 @@ class SkytaleRepository(
         uploaded.toModel()
     }
 
-    suspend fun sendMessage(chatId: String, text: String, replyToId: String? = null, media: MediaModel? = null): ApiMessage {
-        val message = api.sendMessage(chatId, SendMessageRequest(text = text, media = media?.toApi(), replyToId = replyToId))
+    suspend fun sendMessage(chatId: String, text: String, replyToId: String? = null, media: MediaModel? = null, forwardMessageId: String? = null): ApiMessage {
+        val message = api.sendMessage(chatId, SendMessageRequest(text = text, media = media?.toApi(), replyToId = replyToId, forwardMessageId = forwardMessageId))
         messages.upsert(message.toEntity(deviceCrypto))
         updateChatPreviewLocally(message)
         return message
@@ -427,6 +613,12 @@ class SkytaleRepository(
             editedAt = 0L,
             deletedAt = 0L,
             status = "sent",
+            commentCount = 0,
+            viewCount = 0,
+            isPinned = false,
+            forwardedFromChatId = "",
+            forwardedFromUsername = "",
+            forwardedFromTitle = "",
         )
         messages.upsert(entity)
         chats.getById(chatId)?.let { existing ->
@@ -514,6 +706,9 @@ class SkytaleRepository(
                     deletedAt = entity.deletedAt,
                     status = entity.status,
                     isOwn = entity.senderId == currentUserId,
+                    commentCount = entity.commentCount,
+                    viewCount = entity.viewCount,
+                    isPinned = entity.isPinned,
                 )
             },
         )
@@ -653,8 +848,12 @@ class SkytaleRepository(
             }
             "message.deleted" -> {
                 val payload = json.decodeFromJsonElement<DeleteMessageEvent>(envelope.data)
-                messages.getById(payload.id)?.let { existing ->
-                    messages.upsert(existing.copy(bodyCiphertext = "", deletedAt = System.currentTimeMillis() / 1000))
+                if (payload.hardDelete) {
+                    messages.deleteById(payload.id)
+                } else {
+                    messages.getById(payload.id)?.let { existing ->
+                        messages.upsert(existing.copy(bodyCiphertext = "", deletedAt = System.currentTimeMillis() / 1000))
+                    }
                 }
                 refreshChats()
                 null
@@ -853,6 +1052,16 @@ private fun ApiChatSummary.toEntity(deviceCrypto: DeviceCrypto): ChatEntity = Ch
     peerCreatedAt = peer?.createdAt,
     peerLastSeenAt = peer?.lastSeenAt,
     peerIsOnline = peer?.isOnline ?: false,
+    username = username,
+    description = description,
+    avatarUrl = avatarUrl,
+    avatarThumbUrl = avatarThumbUrl,
+    memberCount = memberCount,
+    canPost = canPost,
+    canManage = canManage,
+    postingPolicy = postingPolicy,
+    commentsEnabled = commentsEnabled,
+    pinnedPostId = pinnedPostId,
     lastMessageId = lastMessage?.id,
     lastMessagePreviewCiphertext = deviceCrypto.encrypt(
         lastMessage?.text?.ifBlank {
@@ -891,6 +1100,16 @@ private fun ChatEntity.toModel(deviceCrypto: DeviceCrypto): ChatModel = ChatMode
             usernameDiscoverable = true,
         )
     },
+    username = username,
+    description = description,
+    avatarUrl = avatarUrl,
+    avatarThumbUrl = avatarThumbUrl,
+    memberCount = memberCount,
+    canPost = canPost,
+    canManage = canManage,
+    postingPolicy = postingPolicy,
+    commentsEnabled = commentsEnabled,
+    pinnedPostId = pinnedPostId,
     lastMessagePreview = deviceCrypto.decrypt(lastMessagePreviewCiphertext),
     lastMessageCreatedAt = lastMessageCreatedAt,
     lastMessageSenderId = lastMessageSenderId,
@@ -918,6 +1137,12 @@ private fun ApiMessage.toModel(deviceCrypto: DeviceCrypto, currentUserId: String
         deletedAt = entity.deletedAt,
         status = entity.status,
         isOwn = entity.senderId == currentUserId,
+        commentCount = entity.commentCount,
+        viewCount = entity.viewCount,
+        isPinned = entity.isPinned,
+        forwardedFromChatId = entity.forwardedFromChatId,
+        forwardedFromUsername = entity.forwardedFromUsername,
+        forwardedFromTitle = entity.forwardedFromTitle,
     )
 }
 
@@ -940,6 +1165,12 @@ private fun ApiMessage.toEntity(deviceCrypto: DeviceCrypto): MessageEntity = Mes
     editedAt = editedAt,
     deletedAt = deletedAt,
     status = status,
+    commentCount = commentCount,
+    viewCount = viewCount,
+    isPinned = isPinned,
+    forwardedFromChatId = forwardedFromChatId,
+    forwardedFromUsername = forwardedFromUsername,
+    forwardedFromTitle = forwardedFromTitle,
 )
 
 private fun ApiMedia.toModel(): MediaModel = MediaModel(

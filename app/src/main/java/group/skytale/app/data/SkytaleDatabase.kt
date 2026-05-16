@@ -43,6 +43,16 @@ data class ChatEntity(
     val peerCreatedAt: Long?,
     val peerLastSeenAt: Long?,
     val peerIsOnline: Boolean,
+    val username: String,
+    val description: String,
+    val avatarUrl: String,
+    val avatarThumbUrl: String,
+    val memberCount: Int,
+    val canPost: Boolean,
+    val canManage: Boolean,
+    val postingPolicy: String,
+    val commentsEnabled: Boolean,
+    val pinnedPostId: String,
     val lastMessageId: String?,
     val lastMessagePreviewCiphertext: String,
     val lastMessageCreatedAt: Long,
@@ -77,6 +87,12 @@ data class MessageEntity(
     val editedAt: Long,
     val deletedAt: Long,
     val status: String,
+    val commentCount: Int,
+    val viewCount: Int,
+    val isPinned: Boolean,
+    val forwardedFromChatId: String,
+    val forwardedFromUsername: String,
+    val forwardedFromTitle: String,
 )
 
 @Entity(tableName = "feed_posts")
@@ -148,8 +164,14 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY createdAt ASC")
     fun observeByChat(chatId: String): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND replyToId IS NULL ORDER BY createdAt ASC")
+    fun observeRootByChat(chatId: String): Flow<List<MessageEntity>>
+
     @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY createdAt DESC LIMIT :limit")
     suspend fun latestByChat(chatId: String, limit: Int): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId AND replyToId IS NULL ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun latestRootsByChat(chatId: String, limit: Int): List<MessageEntity>
 
     @Query("SELECT * FROM messages WHERE id = :messageId LIMIT 1")
     suspend fun getById(messageId: String): MessageEntity?
@@ -205,7 +227,7 @@ interface UserNicknameOverrideDao {
 
 @Database(
     entities = [ContactEntity::class, ChatEntity::class, MessageEntity::class, FeedPostEntity::class, UserNicknameOverrideEntity::class],
-    version = 3,
+    version = 5,
     exportSchema = false,
 )
 abstract class SkytaleDatabase : RoomDatabase() {

@@ -76,6 +76,12 @@ data class ApiMessage(
     val deletedAt: Long = 0L,
     val status: String = "sent",
     val sender: ApiUser? = null,
+    val commentCount: Int = 0,
+    val viewCount: Int = 0,
+    val isPinned: Boolean = false,
+    val forwardedFromChatId: String = "",
+    val forwardedFromUsername: String = "",
+    val forwardedFromTitle: String = "",
 )
 
 @Serializable
@@ -84,6 +90,16 @@ data class ApiChatSummary(
     val type: String,
     val title: String,
     val peer: ApiUser? = null,
+    val username: String = "",
+    val description: String = "",
+    val avatarUrl: String = "",
+    val avatarThumbUrl: String = "",
+    val memberCount: Int = 0,
+    val canPost: Boolean = true,
+    val canManage: Boolean = false,
+    val postingPolicy: String = "admins",
+    val commentsEnabled: Boolean = true,
+    val pinnedPostId: String = "",
     val lastMessage: ApiMessage? = null,
     val updatedAt: Long,
     val unreadCount: Int,
@@ -129,6 +145,7 @@ data class ApiRealtimeEnvelope(
 data class DeleteMessageEvent(
     val id: String,
     val chatId: String,
+    val hardDelete: Boolean = false,
 )
 
 @Serializable
@@ -150,6 +167,41 @@ data class ChatReadEvent(
     val chatId: String = "",
     val userId: String = "",
     val readAt: Long = 0L,
+)
+
+@Serializable
+data class ApiDirectoryEntry(
+    val kind: String,
+    val id: String,
+    val username: String,
+    val title: String,
+    val description: String = "",
+    val avatarUrl: String = "",
+    val avatarThumbUrl: String = "",
+    val memberCount: Int = 0,
+    val isOnline: Boolean = false,
+)
+
+@Serializable
+data class ApiChannelMember(
+    val user: ApiUser,
+    val role: String,
+    val joinedAt: Long,
+    val isMuted: Boolean = false,
+)
+
+@Serializable
+data class ApiPublicProfile(
+    val kind: String,
+    val id: String,
+    val username: String,
+    val title: String,
+    val description: String = "",
+    val avatarUrl: String = "",
+    val avatarThumbUrl: String = "",
+    val memberCount: Int = 0,
+    val commentsEnabled: Boolean = true,
+    val posts: List<ApiMessage> = emptyList(),
 )
 
 interface SkytaleApi {
@@ -189,6 +241,9 @@ interface SkytaleApi {
 
     @GET("users/search")
     suspend fun searchUsers(@Query("q") query: String): List<ApiUser>
+
+    @GET("directory/search")
+    suspend fun searchDirectory(@Query("q") query: String): List<ApiDirectoryEntry>
 
     @POST("contacts")
     suspend fun addContact(@Body request: AddContactRequest): DirectChatResponse
@@ -251,6 +306,39 @@ interface SkytaleApi {
     @GET("feed")
     suspend fun feed(): List<ApiFeedPost>
 
+    @POST("channels")
+    suspend fun createChannel(@Body request: CreateChannelRequest): ApiChatSummary
+
+    @PATCH("channels/{chatId}")
+    suspend fun updateChannel(@Path("chatId") chatId: String, @Body request: UpdateChannelRequest): ApiChatSummary
+
+    @POST("channels/{chatId}/join")
+    suspend fun joinChannel(@Path("chatId") chatId: String): Map<String, Boolean>
+
+    @POST("channels/{chatId}/leave")
+    suspend fun leaveChannel(@Path("chatId") chatId: String): Map<String, Boolean>
+
+    @DELETE("channels/{chatId}")
+    suspend fun deleteChannel(@Path("chatId") chatId: String): Map<String, Boolean>
+
+    @GET("channels/{chatId}/members")
+    suspend fun channelMembers(@Path("chatId") chatId: String): List<ApiChannelMember>
+
+    @POST("channels/{chatId}/members/{userId}/role")
+    suspend fun setChannelRole(@Path("chatId") chatId: String, @Path("userId") userId: String, @Body request: SetChannelRoleRequest): Map<String, Boolean>
+
+    @POST("channels/{chatId}/pin-post")
+    suspend fun pinChannelPost(@Path("chatId") chatId: String, @Body request: PinChannelPostRequest): Map<String, Boolean>
+
+    @GET("channels/{chatId}/posts/{messageId}/comments")
+    suspend fun channelComments(@Path("chatId") chatId: String, @Path("messageId") messageId: String): List<ApiMessage>
+
+    @POST("channels/{chatId}/posts/{messageId}/comments")
+    suspend fun createChannelComment(@Path("chatId") chatId: String, @Path("messageId") messageId: String, @Body request: CreateCommentRequest): ApiMessage
+
+    @GET("public/{username}")
+    suspend fun publicProfile(@Path("username") username: String): ApiPublicProfile
+
     @POST("realtime/typing")
     suspend fun typing(@Body request: TypingRequest): Map<String, Boolean>
 }
@@ -305,6 +393,7 @@ data class SendMessageRequest(
     val text: String,
     val media: ApiMedia? = null,
     @SerialName("replyToId") val replyToId: String? = null,
+    @SerialName("forwardMessageId") val forwardMessageId: String? = null,
 )
 
 @Serializable
@@ -331,4 +420,42 @@ data class DirectChatResponse(
 data class TypingRequest(
     val chatId: String,
     val isTyping: Boolean,
+)
+
+@Serializable
+data class CreateChannelRequest(
+    val title: String,
+    val username: String,
+    val description: String,
+    val avatarUrl: String = "",
+    val avatarThumbUrl: String = "",
+    val postingPolicy: String = "admins",
+    val commentsEnabled: Boolean = true,
+)
+
+@Serializable
+data class UpdateChannelRequest(
+    val title: String,
+    val username: String,
+    val description: String,
+    val avatarUrl: String = "",
+    val avatarThumbUrl: String = "",
+    val postingPolicy: String = "admins",
+    val commentsEnabled: Boolean = true,
+)
+
+@Serializable
+data class SetChannelRoleRequest(
+    val role: String,
+)
+
+@Serializable
+data class PinChannelPostRequest(
+    val messageId: String,
+)
+
+@Serializable
+data class CreateCommentRequest(
+    val text: String,
+    val media: ApiMedia? = null,
 )

@@ -159,6 +159,7 @@ class MainActivity : FragmentActivity() {
                             onUpdateComposerMediaOptions = viewModel::updateComposerMediaOptions,
                             onCancelPendingUpload = viewModel::cancelPendingUpload,
                             onSelectProfileAvatar = viewModel::selectProfileAvatar,
+                            onSelectChannelAvatar = viewModel::updateChannelAvatar,
                             onClearProfileAvatar = viewModel::clearProfileAvatarSelection,
                             onGeneratePassword = viewModel::generatePassword,
                             onSubmitAuth = viewModel::submitAuth,
@@ -174,8 +175,19 @@ class MainActivity : FragmentActivity() {
                             onCancelReply = viewModel::clearReply,
                             onSearchPeopleQueryChanged = viewModel::updateAddContactQuery,
                             onChatListQueryChanged = viewModel::updateChatListQuery,
+                            onRefreshChats = viewModel::restore,
                             onSearchPeople = viewModel::searchPeople,
+                            onSearchDirectory = viewModel::searchDirectory,
                             onAddContact = viewModel::addContactAndOpen,
+                            onOpenDirectoryEntry = viewModel::openDirectoryEntry,
+                            onCreateChannel = { title, username, description, commentsEnabled ->
+                                viewModel.createChannel(
+                                    title = title,
+                                    username = username,
+                                    description = description,
+                                    commentsEnabled = commentsEnabled,
+                                )
+                            },
                             onOpenContactPreview = viewModel::openContactPreview,
                             onCloseContactPreview = viewModel::closeContactPreview,
                             onOpenPreviewChat = viewModel::openPreviewChat,
@@ -210,6 +222,25 @@ class MainActivity : FragmentActivity() {
                             onEnsureMessageLoaded = viewModel::ensureMessageLoaded,
                             onLoadOlderMessages = viewModel::loadOlderMessages,
                             onTypingChanged = viewModel::setTyping,
+                            onLoadChannelMembers = viewModel::loadChannelMembers,
+                            onUpdateChannelRole = viewModel::updateChannelRole,
+                            onUpdateChannel = { chatId, title, username, description, postingPolicy, commentsEnabled ->
+                                viewModel.updateChannel(
+                                    chatId = chatId,
+                                    title = title,
+                                    username = username,
+                                    description = description,
+                                    postingPolicy = postingPolicy,
+                                    commentsEnabled = commentsEnabled,
+                                )
+                            },
+                            onLeaveChannel = viewModel::leaveChannel,
+                            onDeleteChannel = viewModel::deleteChannel,
+                            onForwardChannelPost = viewModel::forwardMessageToChat,
+                            onPinChannelPost = viewModel::pinChannelPost,
+                            onLoadChannelComments = viewModel::loadChannelComments,
+                            onCloseChannelComments = viewModel::closeChannelComments,
+                            onSendChannelComment = viewModel::sendChannelComment,
                             onDismissErrorDialogs = viewModel::dismissErrorDialogs,
                             onConsumeSoundEvent = viewModel::consumeSoundEvent,
                         )
@@ -227,6 +258,14 @@ class MainActivity : FragmentActivity() {
 
     private fun routeIntent(intent: Intent?) {
         viewModel.handleNotificationChatIntent(intent?.getStringExtra(EXTRA_CHAT_ID))
+        val data = intent?.data
+        val username = when {
+            data == null -> null
+            data.scheme.equals("skytale", ignoreCase = true) -> data.lastPathSegment
+            data.host.equals("use.skytale.dpdns.org", ignoreCase = true) -> data.pathSegments.firstOrNull()
+            else -> null
+        }
+        viewModel.handlePublicLink(username)
     }
 
     fun suppressRelockOnce() {

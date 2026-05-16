@@ -70,6 +70,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -88,6 +89,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ExitToApp
+import androidx.compose.material.icons.automirrored.outlined.Forward
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.automirrored.outlined.Send
@@ -104,6 +107,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.MarkChatUnread
 import androidx.compose.material.icons.outlined.MoreVert
@@ -115,18 +119,26 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Update
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.rounded.Done
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -152,6 +164,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -167,6 +180,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -201,6 +215,7 @@ import group.skytale.app.data.AppLanguage
 import group.skytale.app.data.AuthMode
 import group.skytale.app.data.ChatModel
 import group.skytale.app.data.ContactModel
+import group.skytale.app.data.DirectoryEntryModel
 import group.skytale.app.data.HomeTab
 import group.skytale.app.data.MessageModel
 import group.skytale.app.data.MediaModel
@@ -235,6 +250,7 @@ fun SkytaleRoot(
     onUpdateComposerMediaOptions: (Boolean, Boolean) -> Unit,
     onCancelPendingUpload: (String) -> Unit,
     onSelectProfileAvatar: (String, String, String) -> Unit,
+    onSelectChannelAvatar: (String, String, String, String) -> Unit,
     onClearProfileAvatar: () -> Unit,
     onGeneratePassword: () -> Unit,
     onSubmitAuth: () -> Unit,
@@ -250,8 +266,12 @@ fun SkytaleRoot(
     onCancelReply: () -> Unit,
     onSearchPeopleQueryChanged: (String) -> Unit,
     onChatListQueryChanged: (String) -> Unit,
+    onRefreshChats: () -> Unit,
     onSearchPeople: () -> Unit,
+    onSearchDirectory: () -> Unit,
     onAddContact: (String) -> Unit,
+    onOpenDirectoryEntry: (DirectoryEntryModel) -> Unit,
+    onCreateChannel: (String, String, String, Boolean) -> Unit,
     onOpenContactPreview: (String) -> Unit,
     onCloseContactPreview: () -> Unit,
     onOpenPreviewChat: () -> Unit,
@@ -286,6 +306,16 @@ fun SkytaleRoot(
     onEnsureMessageLoaded: (String, Long) -> Unit,
     onLoadOlderMessages: () -> Unit,
     onTypingChanged: (Boolean) -> Unit,
+    onLoadChannelMembers: (String) -> Unit,
+    onUpdateChannelRole: (String, String, String) -> Unit,
+    onUpdateChannel: (String, String, String, String, String, Boolean) -> Unit,
+    onLeaveChannel: (String) -> Unit,
+    onDeleteChannel: (String) -> Unit,
+    onForwardChannelPost: (String, String) -> Unit,
+    onPinChannelPost: (String, String?) -> Unit,
+    onLoadChannelComments: (String, String) -> Unit,
+    onCloseChannelComments: () -> Unit,
+    onSendChannelComment: (String, String, String) -> Unit,
     onDismissErrorDialogs: () -> Unit,
     onConsumeSoundEvent: () -> Unit,
 ) {
@@ -349,8 +379,12 @@ fun SkytaleRoot(
                         onSaveContactNickname = onSaveContactNickname,
                         onSearchPeopleQueryChanged = onSearchPeopleQueryChanged,
                         onChatListQueryChanged = onChatListQueryChanged,
+                        onRefreshChats = onRefreshChats,
                         onSearchPeople = onSearchPeople,
+                        onSearchDirectory = onSearchDirectory,
                         onAddContact = onAddContact,
+                        onOpenDirectoryEntry = onOpenDirectoryEntry,
+                        onCreateChannel = onCreateChannel,
                         onOpenContactPreview = onOpenContactPreview,
                         onCloseContactPreview = onCloseContactPreview,
                         onOpenPreviewChat = onOpenPreviewChat,
@@ -403,36 +437,68 @@ fun SkytaleRoot(
                         exit = slideOutHorizontally(targetOffsetX = { it / 4 }, animationSpec = tween(220, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(180)),
                     ) {
                         if (overlayChatId != null) {
-                            ChatScreen(
-                                state = if (state.openedChatId == null) state.copy(openedChatId = overlayChatId) else state,
-                            strings = strings,
-                            onBack = onCloseChat,
-                            onSendMessage = onSendMessage,
-                            onSelectComposerMedia = onSelectComposerMedia,
-                            onClearComposerMedia = onClearComposerMedia,
-                            onUpdateComposerMediaOptions = onUpdateComposerMediaOptions,
-                            onCancelPendingUpload = onCancelPendingUpload,
-                            onSaveContactNickname = onSaveContactNickname,
-                            onEditMessage = onEditMessage,
-                            onDeleteMessage = onDeleteMessage,
-                            onReplyMessage = onReplyMessage,
-                            onCancelReply = onCancelReply,
-                            onChatSearchChanged = onChatSearchChanged,
-                            onSearchMessages = onSearchMessages,
-                            onEnsureMessageLoaded = onEnsureMessageLoaded,
-                            onLoadOlderMessages = onLoadOlderMessages,
-                            onTypingChanged = onTypingChanged,
-                            onRemoveContact = onRemoveCurrentContact,
-                            onClearChat = onClearCurrentChat,
-                            onToggleBlocked = onToggleCurrentBlocked,
-                            onToggleMute = {
-                                state.openedChatId?.let { chatId ->
-                                    state.chats.firstOrNull { it.id == chatId }?.let { chat ->
-                                        onToggleMute(chatId, !chat.isMuted)
-                                    }
-                                }
-                            },
-                            )
+                            val overlayState = if (state.openedChatId == null) state.copy(openedChatId = overlayChatId) else state
+                            val openedChat = overlayState.chats.firstOrNull { it.id == overlayChatId }
+                            if (openedChat?.type == "channel") {
+                                ChannelScreen(
+                                    state = overlayState,
+                                    strings = strings,
+                                    onBack = onCloseChat,
+                                    onSendPost = onSendMessage,
+                                    onToggleMute = {
+                                        overlayChatId?.let { chatId ->
+                                            openedChat.let { chat -> onToggleMute(chatId, !chat.isMuted) }
+                                        }
+                                    },
+                                    onSelectComposerMedia = onSelectComposerMedia,
+                                    onClearComposerMedia = onClearComposerMedia,
+                                    onUpdateComposerMediaOptions = onUpdateComposerMediaOptions,
+                                    onCancelPendingUpload = onCancelPendingUpload,
+                                    onSelectChannelAvatar = onSelectChannelAvatar,
+                                    onLoadMembers = onLoadChannelMembers,
+                                    onUpdateMemberRole = onUpdateChannelRole,
+                                    onUpdateChannel = onUpdateChannel,
+                                    onLeaveChannel = onLeaveChannel,
+                                    onDeleteChannel = onDeleteChannel,
+                                    onDeletePost = onDeleteMessage,
+                                    onForwardPost = onForwardChannelPost,
+                                    onPinPost = onPinChannelPost,
+                                    onOpenComments = onLoadChannelComments,
+                                    onCloseComments = onCloseChannelComments,
+                                    onSendComment = onSendChannelComment,
+                                )
+                            } else {
+                                ChatScreen(
+                                    state = overlayState,
+                                    strings = strings,
+                                    onBack = onCloseChat,
+                                    onSendMessage = onSendMessage,
+                                    onSelectComposerMedia = onSelectComposerMedia,
+                                    onClearComposerMedia = onClearComposerMedia,
+                                    onUpdateComposerMediaOptions = onUpdateComposerMediaOptions,
+                                    onCancelPendingUpload = onCancelPendingUpload,
+                                    onSaveContactNickname = onSaveContactNickname,
+                                    onEditMessage = onEditMessage,
+                                    onDeleteMessage = onDeleteMessage,
+                                    onReplyMessage = onReplyMessage,
+                                    onCancelReply = onCancelReply,
+                                    onChatSearchChanged = onChatSearchChanged,
+                                    onSearchMessages = onSearchMessages,
+                                    onEnsureMessageLoaded = onEnsureMessageLoaded,
+                                    onLoadOlderMessages = onLoadOlderMessages,
+                                    onTypingChanged = onTypingChanged,
+                                    onRemoveContact = onRemoveCurrentContact,
+                                    onClearChat = onClearCurrentChat,
+                                    onToggleBlocked = onToggleCurrentBlocked,
+                                    onToggleMute = {
+                                        state.openedChatId?.let { chatId ->
+                                            state.chats.firstOrNull { it.id == chatId }?.let { chat ->
+                                                onToggleMute(chatId, !chat.isMuted)
+                                            }
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -809,7 +875,10 @@ private fun LanguageStep(
             }
         }
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -900,7 +969,12 @@ private fun ColumnScope.StepButton(
     strings: SkytaleStrings,
     onClick: () -> Unit,
 ) {
-    FilledIconButton(onClick = onClick, modifier = Modifier.align(Alignment.End)) {
+    FilledIconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .align(Alignment.End)
+            .navigationBarsPadding(),
+    ) {
         Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = strings.continueLabel)
     }
 }
@@ -947,7 +1021,9 @@ private fun WelcomeStep(
         }
         FilledIconButton(
             onClick = onContinue,
-            modifier = Modifier.align(Alignment.End),
+            modifier = Modifier
+                .align(Alignment.End)
+                .navigationBarsPadding(),
         ) {
             Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = strings.continueLabel)
         }
@@ -1073,8 +1149,12 @@ private fun HomeShell(
     onSaveContactNickname: (String, String) -> Unit,
     onSearchPeopleQueryChanged: (String) -> Unit,
     onChatListQueryChanged: (String) -> Unit,
+    onRefreshChats: () -> Unit,
     onSearchPeople: () -> Unit,
+    onSearchDirectory: () -> Unit,
     onAddContact: (String) -> Unit,
+    onOpenDirectoryEntry: (DirectoryEntryModel) -> Unit,
+    onCreateChannel: (String, String, String, Boolean) -> Unit,
     onOpenContactPreview: (String) -> Unit,
     onCloseContactPreview: () -> Unit,
     onOpenPreviewChat: () -> Unit,
@@ -1111,7 +1191,10 @@ private fun HomeShell(
 ) {
     val view = LocalView.current
     val isNetworkAvailable = rememberNetworkAvailable()
+    var actionMenuVisible by remember { mutableStateOf(false) }
     var addDialog by remember { mutableStateOf(false) }
+    var createChannelDialog by remember { mutableStateOf(false) }
+    var findChannelDialog by remember { mutableStateOf(false) }
     var topMenuExpanded by remember { mutableStateOf(false) }
     var chatsSearchVisible by remember { mutableStateOf(false) }
     var settingsAtRoot by remember { mutableStateOf(true) }
@@ -1172,7 +1255,7 @@ private fun HomeShell(
                             }
                         }
                         if (state.selectedTab == HomeTab.CHATS) {
-                            IconButton(onClick = { addDialog = true }) {
+                            IconButton(onClick = { actionMenuVisible = true }) {
                                 Icon(Icons.Outlined.Add, contentDescription = strings.addContact)
                             }
                             Box {
@@ -1219,7 +1302,7 @@ private fun HomeShell(
         },
         floatingActionButton = {
             if (state.selectedTab == HomeTab.CHATS) {
-                FloatingActionButton(onClick = { addDialog = true }) {
+                FloatingActionButton(onClick = { actionMenuVisible = true }) {
                     Icon(Icons.Outlined.Add, contentDescription = strings.addContact)
                 }
             }
@@ -1297,6 +1380,7 @@ private fun HomeShell(
                         onOpenContactChat = onOpenContactChat,
                         onOpenContactPreview = onOpenContactPreview,
                         onChatListQueryChanged = onChatListQueryChanged,
+                        onRefreshChats = onRefreshChats,
                         onToggleArchive = onToggleArchive,
                         onTogglePin = onTogglePin,
                         onToggleMute = onToggleMute,
@@ -1342,6 +1426,23 @@ private fun HomeShell(
             }
         }
     }
+    if (actionMenuVisible) {
+        CreateMenuDialog(
+            onDismiss = { actionMenuVisible = false },
+            onAddContact = {
+                actionMenuVisible = false
+                addDialog = true
+            },
+            onCreateChannel = {
+                actionMenuVisible = false
+                createChannelDialog = true
+            },
+            onFindChannel = {
+                actionMenuVisible = false
+                findChannelDialog = true
+            },
+        )
+    }
     if (addDialog) {
         AddContactDialog(
             strings = strings,
@@ -1353,6 +1454,29 @@ private fun HomeShell(
             onAdd = {
                 onAddContact(it)
                 addDialog = false
+            },
+        )
+    }
+    if (createChannelDialog) {
+        CreateChannelDialog(
+            onDismiss = { createChannelDialog = false },
+            onCreate = { title, username, description, commentsEnabled ->
+                onCreateChannel(title, username, description, commentsEnabled)
+                createChannelDialog = false
+            },
+        )
+    }
+    if (findChannelDialog) {
+        DirectorySearchDialog(
+            title = if (Locale.getDefault().language == "ru") "Найти канал" else "Find channel",
+            query = state.addContactQuery,
+            results = state.directoryResults.filter { it.kind == "channel" },
+            onQueryChanged = onSearchPeopleQueryChanged,
+            onSearch = onSearchDirectory,
+            onDismiss = { findChannelDialog = false },
+            onOpen = {
+                onOpenDirectoryEntry(it)
+                findChannelDialog = false
             },
         )
     }
@@ -1368,6 +1492,7 @@ private fun HomeShell(
     }
 }
 
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun ChatsTab(
     state: SkytaleUiState,
@@ -1377,6 +1502,7 @@ private fun ChatsTab(
     onOpenContactChat: (String) -> Unit,
     onOpenContactPreview: (String) -> Unit,
     onChatListQueryChanged: (String) -> Unit,
+    onRefreshChats: () -> Unit,
     onToggleArchive: (String, Boolean) -> Unit,
     onTogglePin: (String, Boolean) -> Unit,
     onToggleMute: (String, Boolean) -> Unit,
@@ -1394,54 +1520,72 @@ private fun ChatsTab(
         )
         return
     }
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = state.busy,
+        onRefresh = onRefreshChats,
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pullRefresh(pullRefreshState),
     ) {
-        if (showSearch) {
-            item {
-                Text(
-                    strings.searchChats,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (showSearch) {
+                item {
+                    Text(
+                        strings.searchChats,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        }
-        if (state.contacts.isNotEmpty()) {
-            item {
-                Text(
-                    strings.contacts,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(state.contacts, key = { it.user.id }) { contact ->
-                        ContactShortcut(
-                            contact = contact,
-                            compact = state.settings.compactMode,
-                            hapticsEnabled = state.settings.hapticsEnabled,
-                            onClick = { onOpenContactChat(contact.user.id) },
-                            onLongPress = { onOpenContactPreview(contact.user.id) },
-                        )
+            if (state.contacts.isNotEmpty()) {
+                item {
+                    Text(
+                        strings.contacts,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                item {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(state.contacts, key = { it.user.id }) { contact ->
+                            ContactShortcut(
+                                contact = contact,
+                                compact = state.settings.compactMode,
+                                hapticsEnabled = state.settings.hapticsEnabled,
+                                onClick = { onOpenContactChat(contact.user.id) },
+                                onLongPress = { onOpenContactPreview(contact.user.id) },
+                            )
+                        }
                     }
                 }
             }
+            items(filteredChats, key = { it.id }) { chat ->
+                ChatRow(
+                    chat = chat,
+                    swipesEnabled = state.openedChatId == null,
+                    compact = state.settings.compactMode,
+                    hapticsEnabled = state.settings.hapticsEnabled,
+                    onClick = { onOpenChat(chat.id) },
+                    onToggleArchive = { onToggleArchive(chat.id, !chat.isArchived) },
+                    onTogglePin = { onTogglePin(chat.id, !chat.isPinned) },
+                    onToggleMute = { onToggleMute(chat.id, !chat.isMuted) },
+                    onToggleUnread = { onToggleUnread(chat.id, !chat.isMarkedUnread) },
+                )
+            }
         }
-        items(filteredChats, key = { it.id }) { chat ->
-            ChatRow(
-                chat = chat,
-                compact = state.settings.compactMode,
-                hapticsEnabled = state.settings.hapticsEnabled,
-                onClick = { onOpenChat(chat.id) },
-                onToggleArchive = { onToggleArchive(chat.id, !chat.isArchived) },
-                onTogglePin = { onTogglePin(chat.id, !chat.isPinned) },
-                onToggleMute = { onToggleMute(chat.id, !chat.isMuted) },
-                onToggleUnread = { onToggleUnread(chat.id, !chat.isMarkedUnread) },
-            )
-        }
+        PullRefreshIndicator(
+            refreshing = state.busy,
+            state = pullRefreshState,
+            modifier = Modifier.align(Alignment.TopCenter),
+            backgroundColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 
@@ -1449,6 +1593,7 @@ private fun ChatsTab(
 @OptIn(ExperimentalFoundationApi::class)
 private fun ChatRow(
     chat: ChatModel,
+    swipesEnabled: Boolean,
     compact: Boolean,
     hapticsEnabled: Boolean,
     onClick: () -> Unit,
@@ -1462,6 +1607,9 @@ private fun ChatRow(
     androidx.compose.runtime.key(chat.id, chat.isPinned, chat.isArchived) {
         val dismissState = rememberSwipeToDismissBoxState(
             confirmValueChange = {
+                if (!swipesEnabled) {
+                    return@rememberSwipeToDismissBoxState false
+                }
                 when (it) {
                     SwipeToDismissBoxValue.StartToEnd -> onTogglePin()
                     SwipeToDismissBoxValue.EndToStart -> onToggleArchive()
@@ -1472,6 +1620,7 @@ private fun ChatRow(
         )
         SwipeToDismissBox(
             state = dismissState,
+            gesturesEnabled = swipesEnabled,
             backgroundContent = {
                 val aligned = if (dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd
                 Box(
@@ -1506,7 +1655,8 @@ private fun ChatRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     UserAvatar(
-                        model = chat.peer?.avatarThumbUrl?.ifBlank { chat.peer?.avatarUrl.orEmpty() }.orEmpty(),
+                        model = chat.peer?.avatarThumbUrl?.ifBlank { chat.peer?.avatarUrl.orEmpty() }
+                            ?: chat.avatarThumbUrl.ifBlank { chat.avatarUrl },
                         displayName = chat.title,
                         size = if (compact) 46.dp else 52.dp,
                         textSize = MaterialTheme.typography.labelLarge,
@@ -2342,6 +2492,7 @@ private fun MessageBubble(
     onOpenMedia: (MediaModel) -> Unit,
 ) {
     val strings = LocalSkytaleStrings.current
+    val context = LocalContext.current
     val view = LocalView.current
     var menuExpanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
@@ -2473,6 +2624,33 @@ private fun MessageBubble(
                                     }
                                     Spacer(Modifier.height(6.dp))
                                 }
+                                if (message.forwardedFromUsername.isNotBlank() && message.deletedAt == 0L && !editing) {
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = Color.Black.copy(alpha = if (message.isOwn) 0.12f else 0.08f),
+                                        modifier = Modifier.clickable {
+                                            openExternalUrl(context, "skytale://open/${message.forwardedFromUsername}")
+                                        },
+                                    ) {
+                                        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                                            Text(
+                                                "@${message.forwardedFromUsername}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (message.isOwn) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                            )
+                                            if (message.forwardedFromTitle.isNotBlank()) {
+                                                Spacer(Modifier.height(2.dp))
+                                                Text(
+                                                    message.forwardedFromTitle,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                }
                                 if (editing) {
                                     OutlinedTextField(value = editText, onValueChange = { editText = it }, modifier = Modifier.fillMaxWidth())
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -2574,7 +2752,7 @@ private fun InfoTab(strings: SkytaleStrings) {
                 InfoCardContent(
                     icon = Icons.Outlined.Shield,
                     title = "Что с безопасностью",
-                    body = "Соединение с сервером идёт только по защищённому каналу. В приложении отключён незашифрованный трафик, а клиент доверяет только встроенному сертификату сервера. Сессия и настройки на устройстве тоже хранятся не в открытом виде.",
+                    body = "Соединение с сервером идёт только по защищённому каналу через официальный домен. В приложении отключён незашифрованный трафик, а локальные сессии и настройки на устройстве тоже не хранятся в открытом виде.",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.LockOpen,
@@ -2597,7 +2775,7 @@ private fun InfoTab(strings: SkytaleStrings) {
                 InfoCardContent(
                     icon = Icons.Outlined.Shield,
                     title = "What security looks like today",
-                    body = "The app uses protected transport to the server, blocks cleartext traffic, trusts only the bundled server certificate, and keeps session data encrypted on the device instead of leaving it in plain storage.",
+                    body = "The app uses protected transport over the official domain, blocks cleartext traffic, and keeps session data encrypted on the device instead of leaving it in plain storage.",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.LockOpen,
@@ -2621,9 +2799,9 @@ private fun InfoTab(strings: SkytaleStrings) {
     val supportButton = if (isRussian) "Поддержать" else "Support"
     val changelogTitle = if (isRussian) "Changelog установленной версии" else "Installed version changelog"
     val changelogBody = if (isRussian) {
-        "Версия ${BuildConfig.VERSION_NAME}\n• Прочтение и статусы сообщений обновляются заметно быстрее и локально без тяжёлого полного рефреша.\n• Уведомления теперь ведут в нужный чат, умеют быстрый ответ, накапливаются корректно и лучше работают в фоне.\n• Добавлен выбор нескольких изображений за раз, исправлены проблемы app lock при выборе фото и обновлён поток загрузки аватарки с кропом.\n• Исправлено дублирование звука уведомлений в фоне и улучшен вид блока с несколькими вложениями."
+        "Версия ${BuildConfig.VERSION_NAME}\n• Профили и каналы дочищены: у своего профиля убран бессмысленный переход в публичную ссылку, username теперь копирует публичную ссылку по удержанию, а у каналов убраны дубли кнопок редактирования и смены аватарки.\n• Посты в каналах стали ровнее и спокойнее: нижняя строка больше не разъезжается, комментарии/просмотры/время стоят подряд, закреп больше не висит отдельной плашкой, а сами обновления канала больше не должны дёргать экран при редактировании и удалении.\n• Публичные страницы use.skytale.dpdns.org упрощены и приближены к основному сайту: убраны лишние рамки, свечение, пустые плашки про несуществующие публичные посты, а backend и SQLite сохранены с предыдущими оптимизациями производительности."
     } else {
-        "Version ${BuildConfig.VERSION_NAME}\n• Read states and message status indicators now update much faster with local targeted refreshes.\n• Notifications now open the right chat, support quick reply, accumulate correctly, and behave better in background delivery.\n• Added multi-image picking, fixed app-lock issues around media selection, and refreshed the avatar flow with crop-first upload.\n• Fixed duplicate notification sound in background and improved the composer layout for multiple attachments."
+        "Version ${BuildConfig.VERSION_NAME}\n• Profiles and channels were cleaned up further: your own profile no longer tries to reopen the public link, usernames now copy the public URL on long press, and channel settings no longer duplicate edit or avatar actions.\n• Channel posts now look calmer and update more safely: the footer stays in one line, comments/views/time sit in sequence, the pinned badge no longer hangs over posts, and channel updates should stop causing jumpy redraws on edits or deletes.\n• Public pages on use.skytale.dpdns.org were flattened to match the main site more closely, with the noisy framing, glow, and empty \"no public posts\" panel removed while keeping the earlier backend and SQLite performance work."
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -3660,7 +3838,9 @@ private fun ProfileTab(
 ) {
     val context = LocalContext.current
     val view = LocalView.current
+    val isRussian = remember { Locale.getDefault().language == "ru" }
     var pendingAvatarCrop by remember { mutableStateOf<group.skytale.app.DraftMediaSelection?>(null) }
+    var editing by remember { mutableStateOf(false) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let {
             pendingAvatarCrop = group.skytale.app.DraftMediaSelection(
@@ -3686,63 +3866,124 @@ private fun ProfileTab(
         item {
             Card(shape = RoundedCornerShape(34.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
                 Column(modifier = Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(92.dp)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), CircleShape)
-                                .combinedClickable(
-                                    onClick = {
-                                        (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
-                                        avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                                    },
-                                    onLongClick = {
-                                        if (avatarModel.isNotBlank()) {
-                                            performLongPressHaptic(view)
-                                            avatarMenuExpanded = true
-                                        }
-                                    },
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            UserAvatar(
-                                model = avatarModel,
-                                displayName = state.nickname.ifBlank { state.session?.nickname.orEmpty() },
-                                size = 92.dp,
-                                textSize = MaterialTheme.typography.titleLarge,
-                            )
-                            DropdownMenu(expanded = avatarMenuExpanded, onDismissRequest = { avatarMenuExpanded = false }) {
-                                DropdownMenuItem(
-                                    text = { Text(strings.delete) },
-                                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
-                                    onClick = {
-                                        avatarMenuExpanded = false
-                                        onClearProfileAvatar()
-                                    },
+                    if (!editing) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(92.dp)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                UserAvatar(
+                                    model = avatarModel,
+                                    displayName = state.nickname.ifBlank { state.session?.nickname.orEmpty() },
+                                    size = 92.dp,
+                                    textSize = MaterialTheme.typography.titleLarge,
                                 )
                             }
+                            Spacer(Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(state.nickname.ifBlank { state.session?.nickname.orEmpty() }, style = MaterialTheme.typography.headlineMedium)
+                                if (state.session?.username?.isNotBlank() == true) {
+                                    ProfileUsernameLink(
+                                        username = state.session.username,
+                                        enableOpen = false,
+                                    )
+                                }
+                                Text(
+                                    if (state.session == null) "" else strings.online,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            FilledIconButton(onClick = { editing = true }, modifier = Modifier.size(38.dp)) {
+                                Icon(Icons.Outlined.Edit, contentDescription = strings.edit, modifier = Modifier.size(18.dp))
+                            }
                         }
-                        Spacer(Modifier.width(16.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(state.nickname.ifBlank { state.session?.nickname.orEmpty() }, style = MaterialTheme.typography.headlineMedium)
-                            Text(state.session?.username.orEmpty(), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
-                                if (state.session == null) "" else strings.online,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        if (state.about.isNotBlank()) {
+                            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    MessageText(
+                                        text = state.about,
+                                        ownMessage = false,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                }
+                            }
                         }
-                    }
-                    if (state.selectedProfileAvatar != null) {
-                        TextButton(onClick = onClearProfileAvatar, modifier = Modifier.align(Alignment.End)) {
-                            Text(strings.cancel)
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(92.dp)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), CircleShape)
+                                    .combinedClickable(
+                                        onClick = {
+                                            (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
+                                            avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                        },
+                                        onLongClick = {
+                                            if (avatarModel.isNotBlank()) {
+                                                performLongPressHaptic(view)
+                                                avatarMenuExpanded = true
+                                            }
+                                        },
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                UserAvatar(
+                                    model = avatarModel,
+                                    displayName = state.nickname.ifBlank { state.session?.nickname.orEmpty() },
+                                    size = 92.dp,
+                                    textSize = MaterialTheme.typography.titleLarge,
+                                )
+                                DropdownMenu(expanded = avatarMenuExpanded, onDismissRequest = { avatarMenuExpanded = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text(strings.delete) },
+                                        leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                                        onClick = {
+                                            avatarMenuExpanded = false
+                                            onClearProfileAvatar()
+                                        },
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(state.nickname.ifBlank { state.session?.nickname.orEmpty() }, style = MaterialTheme.typography.headlineMedium)
+                                Text(state.session?.username.orEmpty(), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    if (state.session == null) "" else strings.online,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { editing = false }) {
+                                Text(strings.cancel)
+                            }
                         }
-                    }
-                    OutlinedTextField(value = state.username, onValueChange = onUsernameChanged, label = { Text(strings.username) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    OutlinedTextField(value = state.nickname, onValueChange = onNicknameChanged, label = { Text(strings.nickname) }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = state.about, onValueChange = onAboutChanged, label = { Text(strings.about) }, modifier = Modifier.fillMaxWidth(), minLines = 4)
-                    FilledIconButton(onClick = onSaveProfile, modifier = Modifier.align(Alignment.End)) {
-                        Icon(Icons.Rounded.Done, contentDescription = strings.save)
+                        if (state.selectedProfileAvatar != null) {
+                            TextButton(onClick = onClearProfileAvatar, modifier = Modifier.align(Alignment.End)) {
+                                Text(strings.cancel)
+                            }
+                        }
+                        OutlinedTextField(value = state.username, onValueChange = onUsernameChanged, label = { Text(strings.username) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(value = state.nickname, onValueChange = onNicknameChanged, label = { Text(strings.nickname) }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = state.about, onValueChange = onAboutChanged, label = { Text(strings.about) }, modifier = Modifier.fillMaxWidth(), minLines = 4)
+                        FilledIconButton(
+                            onClick = {
+                                onSaveProfile()
+                                editing = false
+                            },
+                            modifier = Modifier.align(Alignment.End),
+                        ) {
+                            Icon(Icons.Rounded.Done, contentDescription = strings.save)
+                        }
                     }
                 }
             }
@@ -4533,7 +4774,7 @@ private fun ContactProfileScreen(
                                 Icon(Icons.Outlined.Edit, contentDescription = nicknameDialogTitle, modifier = Modifier.size(18.dp))
                             }
                         }
-                        Text(user.username, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        ProfileUsernameLink(username = user.username)
                     }
                     Surface(
                         shape = RoundedCornerShape(20.dp),
@@ -4627,6 +4868,181 @@ private fun EmptyState(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ChannelProfileScreen(
+    strings: SkytaleStrings,
+    chat: ChatModel,
+    onClose: () -> Unit,
+    onChangeAvatar: (String, String, String, String) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val isRussian = remember { Locale.getDefault().language == "ru" }
+    val view = LocalView.current
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val threshold = with(density) { 42.dp.toPx() }
+    val scope = rememberCoroutineScope()
+    var dragDistance by remember { mutableStateOf(0f) }
+    var swipeHapticTriggered by remember(chat.id) { mutableStateOf(false) }
+    var pendingAvatarCrop by remember(chat.id) { mutableStateOf<group.skytale.app.DraftMediaSelection?>(null) }
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        pendingAvatarCrop = group.skytale.app.DraftMediaSelection(
+            uri = uri.toString(),
+            fileName = context.resolveDisplayName(uri),
+            mimeType = context.contentResolver.getType(uri).orEmpty().ifBlank { "image/jpeg" },
+        )
+    }
+    BackHandler(onBack = onClose)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(chat.id) {
+                detectHorizontalDragGestures(
+                    onDragStart = {
+                        dragDistance = 0f
+                        swipeHapticTriggered = false
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        if (dragAmount > 0f) {
+                            dragDistance = (dragDistance + dragAmount).coerceIn(0f, threshold * 1.35f)
+                            if (!swipeHapticTriggered && dragDistance >= threshold) {
+                                performGestureThresholdHaptic(view)
+                                swipeHapticTriggered = true
+                            }
+                        }
+                    },
+                    onDragEnd = {
+                        swipeHapticTriggered = false
+                        if (dragDistance >= threshold) {
+                            onClose()
+                        } else {
+                            scope.launch {
+                                animate(
+                                    initialValue = dragDistance,
+                                    targetValue = 0f,
+                                    animationSpec = tween(180, easing = FastOutSlowInEasing),
+                                ) { value, _ ->
+                                    dragDistance = value
+                                }
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        dragDistance = 0f
+                        swipeHapticTriggered = false
+                    },
+                )
+            },
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background.copy(alpha = 0.985f),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = strings.back)
+                    }
+                    Text(if (isRussian) "Профиль канала" else "Channel profile", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    if (chat.canManage) {
+                        FilledIconButton(onClick = onOpenSettings, modifier = Modifier.size(38.dp)) {
+                            Icon(Icons.Outlined.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+                Card(
+                    shape = RoundedCornerShape(32.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(22.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier.combinedClickable(
+                                onClick = {
+                                    if (chat.canManage) {
+                                        (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
+                                        avatarPicker.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                        )
+                                    }
+                                },
+                                onLongClick = {
+                                    if (chat.canManage) {
+                                        performLongPressHaptic(view)
+                                        (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
+                                        avatarPicker.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                        )
+                                    }
+                                },
+                            ),
+                        ) {
+                            UserAvatar(
+                                model = chat.avatarThumbUrl.ifBlank { chat.avatarUrl },
+                                displayName = chat.title,
+                                size = 96.dp,
+                                textSize = MaterialTheme.typography.headlineSmall,
+                            )
+                        }
+                        Text(chat.title, style = MaterialTheme.typography.headlineMedium)
+                        if (chat.username.isNotBlank()) {
+                            ProfileUsernameLink(
+                                username = chat.username,
+                                onClick = { openExternalUrl(context, "skytale://open/${chat.username.trim().removePrefix("@")}") },
+                            )
+                        }
+                        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Text(
+                                    "${chat.memberCount} ${if (isRussian) "подписчиков" else "subscribers"}",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                if (chat.description.isNotBlank()) {
+                                    HorizontalDivider()
+                                    MessageText(
+                                        text = chat.description,
+                                        ownMessage = false,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pendingAvatarCrop?.let { selection ->
+        AvatarCropDialog(
+            selection = selection,
+            onDismiss = { pendingAvatarCrop = null },
+            onConfirm = { croppedUri, fileName, mimeType ->
+                pendingAvatarCrop = null
+                onChangeAvatar(chat.id, croppedUri, fileName, mimeType)
+            },
+        )
+    }
+}
+
 @Composable
 private fun MessageText(
     text: String,
@@ -4640,7 +5056,7 @@ private fun MessageText(
         MaterialTheme.colorScheme.primary
     }
     val annotated = remember(text, linkColor) { buildLinkedMessage(text, linkColor) }
-    val hasLinks = remember(text) { urlRegex.containsMatchIn(text) }
+    val hasLinks = remember(text) { urlRegex.containsMatchIn(text) || mentionRegex.containsMatchIn(text) }
     if (!hasLinks) {
         Text(text = text, style = style)
         return
@@ -4657,24 +5073,1307 @@ private fun MessageText(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ProfileUsernameLink(
+    username: String,
+    enableOpen: Boolean = true,
+    onClick: (() -> Unit)? = null,
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val view = LocalView.current
+    val isRussian = Locale.getDefault().language == "ru"
+    val normalized = username.trim().removePrefix("@")
+    val url = "https://use.skytale.dpdns.org/$normalized"
+    val openAction = onClick ?: if (enableOpen) {
+        { openExternalUrl(context, "skytale://open/$normalized") }
+    } else {
+        null
+    }
+    Text(
+        text = "@$normalized",
+        color = MaterialTheme.colorScheme.primary,
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.combinedClickable(
+            onClick = { openAction?.invoke() },
+            onLongClick = {
+                performLongPressHaptic(view)
+                clipboard.setText(AnnotatedString(url))
+                Toast.makeText(
+                    context,
+                    if (isRussian) "Ссылка скопирована" else "Link copied",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+        ),
+    )
+}
+
+@Composable
+private fun ChannelPostActionsDialog(
+    chat: ChatModel,
+    post: MessageModel,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onForward: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val isRussian = Locale.getDefault().language == "ru"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isRussian) "Действия с постом" else "Post actions") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MenuActionRow(icon = Icons.Outlined.ContentCopy, title = if (isRussian) "Копировать" else "Copy", onClick = onCopy)
+                MenuActionRow(icon = Icons.AutoMirrored.Outlined.Forward, title = if (isRussian) "Переслать" else "Forward", onClick = onForward)
+                if (chat.canManage || post.isOwn) {
+                    MenuActionRow(icon = Icons.Outlined.DeleteOutline, title = if (isRussian) "Удалить" else "Delete", onClick = onDelete)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(if (isRussian) "Закрыть" else "Close") } },
+    )
+}
+
+@Composable
+private fun ForwardChannelPostDialog(
+    chats: List<ChatModel>,
+    onDismiss: () -> Unit,
+    onForward: (String) -> Unit,
+) {
+    val isRussian = Locale.getDefault().language == "ru"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isRussian) "Переслать пост" else "Forward post") },
+        text = {
+            if (chats.isEmpty()) {
+                Text(if (isRussian) "Нет доступных чатов" else "No chats available", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(chats, key = { it.id }) { item ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onForward(item.id) },
+                            shape = RoundedCornerShape(20.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                UserAvatar(
+                                    model = item.peer?.avatarThumbUrl?.ifBlank { item.peer?.avatarUrl.orEmpty() } ?: item.avatarThumbUrl.ifBlank { item.avatarUrl },
+                                    displayName = item.title,
+                                    size = 42.dp,
+                                    textSize = MaterialTheme.typography.labelLarge,
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    val subtitle = if (item.type == "channel" && item.username.isNotBlank()) "@${item.username}" else item.lastMessagePreview
+                                    if (subtitle.isNotBlank()) {
+                                        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(if (isRussian) "Отмена" else "Cancel") } },
+    )
+}
+
+@Composable
+private fun CreateMenuDialog(
+    onDismiss: () -> Unit,
+    onAddContact: () -> Unit,
+    onCreateChannel: () -> Unit,
+    onFindChannel: () -> Unit,
+) {
+    val isRussian = Locale.getDefault().language == "ru"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isRussian) "Создать" else "Create") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MenuActionRow(icon = Icons.Outlined.Person, title = if (isRussian) "Добавить контакт" else "Add contact", onClick = onAddContact)
+                MenuActionRow(icon = Icons.Outlined.ChatBubbleOutline, title = if (isRussian) "Создать канал" else "Create channel", onClick = onCreateChannel)
+                MenuActionRow(icon = Icons.Outlined.Search, title = if (isRussian) "Найти канал" else "Find channel", onClick = onFindChannel)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(if (isRussian) "Закрыть" else "Close") } },
+    )
+}
+
+@Composable
+private fun MenuActionRow(
+    icon: ImageVector,
+    title: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text(title, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+@Composable
+private fun CreateChannelDialog(
+    onDismiss: () -> Unit,
+    onCreate: (String, String, String, Boolean) -> Unit,
+) {
+    val isRussian = Locale.getDefault().language == "ru"
+    var title by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var commentsEnabled by remember { mutableStateOf(true) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isRussian) "Создать канал" else "Create channel") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text(if (isRussian) "Название" else "Title") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text(if (isRussian) "Username" else "Username") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text(if (isRussian) "Описание" else "Description") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(if (isRussian) "Комментарии" else "Comments")
+                    Switch(checked = commentsEnabled, onCheckedChange = { commentsEnabled = it })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onCreate(title.trim(), username.trim(), description.trim(), commentsEnabled) },
+                enabled = title.trim().length >= 2,
+            ) { Text(if (isRussian) "Создать" else "Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(if (isRussian) "Отмена" else "Cancel") } },
+    )
+}
+
+@Composable
+private fun DirectorySearchDialog(
+    title: String,
+    query: String,
+    results: List<DirectoryEntryModel>,
+    onQueryChanged: (String) -> Unit,
+    onSearch: () -> Unit,
+    onDismiss: () -> Unit,
+    onOpen: (DirectoryEntryModel) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(value = query, onValueChange = onQueryChanged, label = { Text(title) }, modifier = Modifier.fillMaxWidth())
+                OutlinedButton(onClick = onSearch, modifier = Modifier.fillMaxWidth(), enabled = query.trim().length >= 3) {
+                    Icon(Icons.Outlined.Search, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(title)
+                }
+                if (results.isNotEmpty()) {
+                    LazyColumn(modifier = Modifier.height(260.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(results, key = { "${it.kind}:${it.id}" }) { item ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onOpen(item) },
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    UserAvatar(
+                                        model = item.avatarThumbUrl.ifBlank { item.avatarUrl },
+                                        displayName = item.title,
+                                        size = 42.dp,
+                                        textSize = MaterialTheme.typography.labelLarge,
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("@${item.username}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        if (item.description.isNotBlank()) {
+                                            Text(item.description, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                    if (item.kind == "channel") {
+                                        Text(item.memberCount.toString(), color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(if (Locale.getDefault().language == "ru") "Закрыть" else "Close") } },
+    )
+}
+
+@Composable
+private fun ChannelScreen(
+    state: SkytaleUiState,
+    strings: SkytaleStrings,
+    onBack: () -> Unit,
+    onSendPost: (String) -> Unit,
+    onToggleMute: () -> Unit,
+    onSelectComposerMedia: (String, String, String) -> Unit,
+    onClearComposerMedia: () -> Unit,
+    onUpdateComposerMediaOptions: (Boolean, Boolean) -> Unit,
+    onCancelPendingUpload: (String) -> Unit,
+    onSelectChannelAvatar: (String, String, String, String) -> Unit,
+    onLoadMembers: (String) -> Unit,
+    onUpdateMemberRole: (String, String, String) -> Unit,
+    onUpdateChannel: (String, String, String, String, String, Boolean) -> Unit,
+    onLeaveChannel: (String) -> Unit,
+    onDeleteChannel: (String) -> Unit,
+    onDeletePost: (String) -> Unit,
+    onForwardPost: (String, String) -> Unit,
+    onPinPost: (String, String?) -> Unit,
+    onOpenComments: (String, String) -> Unit,
+    onCloseComments: () -> Unit,
+    onSendComment: (String, String, String) -> Unit,
+) {
+    val chat = state.chats.firstOrNull { it.id == state.openedChatId } ?: return
+    val view = LocalView.current
+    val isRussian = Locale.getDefault().language == "ru"
+    val posts by remember(chat.id, state.messages) {
+        derivedStateOf { state.messages.sortedBy { it.createdAt } }
+    }
+    val pinnedPost by remember(posts) {
+        derivedStateOf { posts.firstOrNull { it.isPinned } }
+    }
+    val pendingUploads by remember(chat.id, state.pendingUploads) {
+        derivedStateOf { state.pendingUploads.filter { it.chatId == chat.id } }
+    }
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val compact = state.settings.compactMode
+    val swipeThreshold = with(density) { 32.dp.toPx() }
+    val scope = rememberCoroutineScope()
+    var draft by remember(chat.id) { mutableStateOf("") }
+    var menuExpanded by remember(chat.id) { mutableStateOf(false) }
+    var settingsVisible by remember(chat.id) { mutableStateOf(false) }
+    var membersVisible by remember(chat.id) { mutableStateOf(false) }
+    var profileVisible by remember(chat.id) { mutableStateOf(false) }
+    var initialScrollDone by remember(chat.id) { mutableStateOf(false) }
+    var openedMedia by remember(chat.id) { mutableStateOf<MediaModel?>(null) }
+    var composerMediaOptionsVisible by remember(chat.id) { mutableStateOf(false) }
+    var forwardingPost by remember(chat.id) { mutableStateOf<MessageModel?>(null) }
+    var attachmentMenuExpanded by remember(chat.id) { mutableStateOf(false) }
+    var dragDistance by remember(chat.id) { mutableStateOf(0f) }
+    var backSwipeHapticTriggered by remember(chat.id) { mutableStateOf(false) }
+    var pendingCameraUri by remember(chat.id) { mutableStateOf<Uri?>(null) }
+    var previousPostCount by remember(chat.id) { mutableIntStateOf(0) }
+    var previousLastPostId by remember(chat.id) { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val animatedImeBottom by animateDpAsState(
+        targetValue = with(density) { imeBottomPx.toDp() },
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "channel-ime-bottom",
+    )
+    val localeIsRussian = remember { Locale.getDefault().language == "ru" }
+    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
+        uris.forEach { uri ->
+            onSelectComposerMedia(
+                uri.toString(),
+                context.resolveDisplayName(uri),
+                context.contentResolver.getType(uri).orEmpty().ifBlank { "image/jpeg" },
+            )
+        }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val cameraUri = pendingCameraUri
+        if (cameraUri != null) {
+            context.revokeUriPermission(cameraUri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+        pendingCameraUri = null
+        if (result.resultCode == Activity.RESULT_OK && cameraUri != null) {
+            onSelectComposerMedia(
+                cameraUri.toString(),
+                context.resolveDisplayName(cameraUri),
+                context.contentResolver.getType(cameraUri).orEmpty().ifBlank { "image/jpeg" },
+            )
+        }
+    }
+    fun openSystemCamera() {
+        val cameraUri = runCatching { context.createCameraImageUri() }.getOrElse {
+            Toast.makeText(
+                context,
+                if (localeIsRussian) "Не удалось подготовить фото" else "Unable to prepare photo",
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(android.provider.MediaStore.EXTRA_OUTPUT, cameraUri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            clipData = ClipData.newUri(context.contentResolver, "Skytale camera", cameraUri)
+        }
+        val resolvedActivities = context.packageManager.queryIntentActivities(
+            intent,
+            PackageManager.MATCH_DEFAULT_ONLY,
+        )
+        if (resolvedActivities.isEmpty()) {
+            Toast.makeText(
+                context,
+                if (localeIsRussian) "Камера недоступна" else "Camera unavailable",
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        pendingCameraUri = cameraUri
+        resolvedActivities.mapNotNull { it.activityInfo?.packageName }.distinct().forEach { packageName ->
+            context.grantUriPermission(
+                packageName,
+                cameraUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        cameraLauncher.launch(intent)
+    }
+    val requestCameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
+            openSystemCamera()
+        } else {
+            Toast.makeText(
+                context,
+                if (localeIsRussian) "Нет доступа к камере" else "Camera permission denied",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+    BackHandler(onBack = onBack)
+    BackHandler(enabled = profileVisible) { profileVisible = false }
+    LaunchedEffect(membersVisible, chat.id) {
+        if (membersVisible) {
+            onLoadMembers(chat.id)
+        }
+    }
+    LaunchedEffect(posts.size, posts.lastOrNull()?.id) {
+        if (posts.isEmpty()) {
+            initialScrollDone = false
+            previousPostCount = 0
+            previousLastPostId = null
+            return@LaunchedEffect
+        }
+        if (!initialScrollDone) {
+            listState.scrollToItem(posts.lastIndex)
+            initialScrollDone = true
+            previousPostCount = posts.size
+            previousLastPostId = posts.lastOrNull()?.id
+            return@LaunchedEffect
+        }
+        val currentLastPostId = posts.lastOrNull()?.id
+        val userNearBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= (posts.lastIndex - 2)
+        val appendedPost = posts.size > previousPostCount && previousLastPostId != currentLastPostId
+        if (appendedPost && userNearBottom) {
+            listState.animateScrollToItem(posts.lastIndex)
+        }
+        previousPostCount = posts.size
+        previousLastPostId = currentLastPostId
+    }
+    val performBackAction: () -> Unit = {
+        dragDistance = 0f
+        if (profileVisible) {
+            profileVisible = false
+        } else {
+            onBack()
+        }
+    }
+    val updateBackDrag: (Float) -> Unit = { delta ->
+        dragDistance = (dragDistance + delta).coerceIn(0f, swipeThreshold * 1.35f)
+        if (!backSwipeHapticTriggered && dragDistance >= swipeThreshold) {
+            performGestureThresholdHaptic(view, state.settings.hapticsEnabled)
+            backSwipeHapticTriggered = true
+        }
+        if (dragDistance >= swipeThreshold) {
+            performBackAction()
+        }
+    }
+    val cancelBackDrag: () -> Unit = {
+        dragDistance = 0f
+        backSwipeHapticTriggered = false
+    }
+    val animateBackDragReset: () -> Unit = {
+        scope.launch {
+            animate(
+                initialValue = dragDistance,
+                targetValue = 0f,
+                animationSpec = tween(180, easing = FastOutSlowInEasing),
+            ) { value, _ ->
+                dragDistance = value
+            }
+        }
+    }
+    val finishBackDrag: () -> Unit = {
+        val shouldGoBack = dragDistance >= swipeThreshold
+        backSwipeHapticTriggered = false
+        if (shouldGoBack) {
+            performBackAction()
+        } else {
+            animateBackDragReset()
+        }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.surface)))
+            .pointerInput(chat.id, profileVisible) {
+                detectHorizontalDragGestures(
+                    onDragStart = { cancelBackDrag() },
+                    onHorizontalDrag = { _, dragAmount ->
+                        if (dragAmount > 0f) {
+                            updateBackDrag(dragAmount)
+                        }
+                    },
+                    onDragEnd = finishBackDrag,
+                    onDragCancel = cancelBackDrag,
+                )
+            },
+    ) {
+        if (dragDistance > 0.5f) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 10.dp)
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f))
+                    .alpha((dragDistance / swipeThreshold).coerceIn(0f, 1f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = animatedImeBottom),
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 10.dp,
+                shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = strings.back)
+                        }
+                        UserAvatar(
+                            model = chat.avatarThumbUrl.ifBlank { chat.avatarUrl },
+                            displayName = chat.title,
+                            size = 38.dp,
+                            textSize = MaterialTheme.typography.labelLarge,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { profileVisible = true },
+                        ) {
+                            Text(
+                                chat.title,
+                                style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                if (chat.memberCount > 0) {
+                                    "${chat.memberCount} ${if (isRussian) "подписчиков" else "subscribers"}"
+                                } else {
+                                    if (isRussian) "Канал" else "Channel"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Box {
+                            IconButton(onClick = { menuExpanded = true }) {
+                                Icon(Icons.Outlined.MoreVert, contentDescription = null)
+                            }
+                            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(if (chat.isMuted) strings.unmute else strings.mute) },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.VolumeOff, null) },
+                                    onClick = {
+                                        onToggleMute()
+                                        menuExpanded = false
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isRussian) "Профиль канала" else "Channel profile") },
+                                    leadingIcon = { Icon(Icons.Outlined.Info, null) },
+                                    onClick = {
+                                        profileVisible = true
+                                        menuExpanded = false
+                                    },
+                                )
+                                if (chat.canManage) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (isRussian) "Настройки канала" else "Channel settings") },
+                                        leadingIcon = { Icon(Icons.Outlined.Settings, null) },
+                                        onClick = {
+                                            settingsVisible = true
+                                            menuExpanded = false
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(if (isRussian) "Администраторы" else "Admins") },
+                                        leadingIcon = { Icon(Icons.Outlined.Person, null) },
+                                        onClick = {
+                                            membersVisible = true
+                                            menuExpanded = false
+                                        },
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text(if (isRussian) "Покинуть канал" else "Leave channel") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ExitToApp, null) },
+                                    onClick = {
+                                        onLeaveChannel(chat.id)
+                                        menuExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    AnimatedVisibility(visible = pinnedPost != null) {
+                        val post = pinnedPost ?: return@AnimatedVisibility
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(22.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Outlined.PushPin, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                    Text(if (isRussian) "Закреплённый пост" else "Pinned post", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Text(
+                                    post.text.ifBlank {
+                                        if (post.media != null) {
+                                            if (isRussian) "Медиа-вложение" else "Media attachment"
+                                        } else {
+                                            strings.messageDeleted
+                                        }
+                                    },
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .graphicsLayer { alpha = if (posts.isEmpty() || initialScrollDone) 1f else 0f },
+                state = listState,
+                contentPadding = PaddingValues(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(posts, key = { it.id }) { post ->
+                    ChannelPostBubble(
+                        post = post,
+                        compact = compact,
+                        isRussian = isRussian,
+                        hapticsEnabled = state.settings.hapticsEnabled,
+                        commentsEnabled = chat.commentsEnabled,
+                        canManage = chat.canManage,
+                        onPinPost = { onPinPost(chat.id, if (post.isPinned) null else post.id) },
+                        onOpenComments = { onOpenComments(chat.id, post.id) },
+                        onForward = { forwardingPost = post },
+                        onDelete = { onDeletePost(post.id) },
+                        onOpenMedia = { media -> openedMedia = media },
+                    )
+                }
+                items(pendingUploads, key = { it.localId }, contentType = { "pending-upload" }) { pending ->
+                    PendingImageBubble(
+                        localUri = pending.localUri,
+                        progress = pending.progress,
+                        onCancel = { onCancelPendingUpload(pending.localId) },
+                    )
+                }
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                shadowElevation = 10.dp,
+                shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+            ) {
+                if (chat.canPost) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        AnimatedVisibility(visible = state.selectedComposerMedia.isNotEmpty()) {
+                            SelectedMediaComposer(
+                                selections = state.selectedComposerMedia,
+                                hapticsEnabled = state.settings.hapticsEnabled,
+                                onRemove = onClearComposerMedia,
+                                onLongPress = { composerMediaOptionsVisible = true },
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextField(
+                                    value = draft,
+                                    onValueChange = { draft = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    placeholder = { Text(if (isRussian) "Новый пост" else "New post") },
+                                    maxLines = 5,
+                                    shape = RoundedCornerShape(30.dp),
+                                    colors = TextFieldDefaults.colors(
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        disabledIndicatorColor = Color.Transparent,
+                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    ),
+                                    leadingIcon = {
+                                        Box {
+                                            IconButton(onClick = { attachmentMenuExpanded = true }) {
+                                                Icon(Icons.Outlined.Add, contentDescription = strings.add)
+                                            }
+                                            DropdownMenu(
+                                                expanded = attachmentMenuExpanded,
+                                                onDismissRequest = { attachmentMenuExpanded = false },
+                                            ) {
+                                                DropdownMenuItem(
+                                                    leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null) },
+                                                    text = { Text("Сделать фото") },
+                                                    onClick = {
+                                                        attachmentMenuExpanded = false
+                                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                                            (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
+                                                            openSystemCamera()
+                                                        } else {
+                                                            requestCameraPermission.launch(Manifest.permission.CAMERA)
+                                                        }
+                                                    },
+                                                )
+                                                DropdownMenuItem(
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            painter = painterResource(R.drawable.ic_attach_gallery),
+                                                            contentDescription = null,
+                                                        )
+                                                    },
+                                                    text = { Text("Выбрать фото") },
+                                                    onClick = {
+                                                        attachmentMenuExpanded = false
+                                                        (context as? group.skytale.app.MainActivity)?.suppressRelockOnce()
+                                                        mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            FilledIconButton(
+                                onClick = {
+                                    if (draft.isNotBlank() || state.selectedComposerMedia.isNotEmpty()) {
+                                        onSendPost(draft.trim())
+                                        draft = ""
+                                    }
+                                },
+                                modifier = Modifier.size(52.dp),
+                            ) {
+                                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null)
+                            }
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 18.dp, vertical = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        FilledTonalButton(
+                            onClick = onToggleMute,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.AutoMirrored.Outlined.VolumeOff, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (chat.isMuted) strings.unmute else strings.mute)
+                        }
+                        if (!chat.commentsEnabled) {
+                            Text(
+                                if (isRussian) "Комментарии в этом канале отключены." else "Comments are disabled in this channel.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+    state.openedChannelCommentsPostId?.let { postId ->
+        ChannelCommentsDialog(
+            comments = state.channelComments,
+            onDismiss = onCloseComments,
+            onSend = { text -> onSendComment(chat.id, postId, text) },
+        )
+    }
+    if (settingsVisible) {
+        ChannelSettingsDialog(
+            chat = chat,
+            onDismiss = { settingsVisible = false },
+            onSave = { title, username, description, postingPolicy, commentsEnabled ->
+                onUpdateChannel(chat.id, title, username, description, postingPolicy, commentsEnabled)
+                settingsVisible = false
+            },
+            onDelete = {
+                settingsVisible = false
+                onDeleteChannel(chat.id)
+            }
+        )
+    }
+    if (membersVisible) {
+        ChannelMembersDialog(
+            chat = chat,
+            members = state.channelMembers,
+            onDismiss = { membersVisible = false },
+            onToggleRole = { userId, role -> onUpdateMemberRole(chat.id, userId, role) },
+        )
+    }
+    if (openedMedia != null) {
+        FullscreenImageViewer(
+            media = openedMedia!!,
+            onClose = { openedMedia = null },
+        )
+    }
+    if (composerMediaOptionsVisible && state.selectedComposerMedia.isNotEmpty()) {
+        AttachmentOptionsDialog(
+            strings = strings,
+            selection = state.selectedComposerMedia.first(),
+            selectedCount = state.selectedComposerMedia.size,
+            onDismiss = { composerMediaOptionsVisible = false },
+            onOptionsChanged = onUpdateComposerMediaOptions,
+        )
+    }
+    AnimatedVisibility(
+        visible = profileVisible,
+        enter = slideInHorizontally(initialOffsetX = { it / 5 }, animationSpec = tween(240, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(220)),
+        exit = slideOutHorizontally(targetOffsetX = { it / 5 }, animationSpec = tween(200)) + fadeOut(animationSpec = tween(180)),
+    ) {
+        ChannelProfileScreen(
+            strings = strings,
+            chat = chat,
+            onClose = { profileVisible = false },
+            onChangeAvatar = onSelectChannelAvatar,
+            onOpenSettings = {
+                profileVisible = false
+                settingsVisible = true
+            },
+        )
+    }
+    forwardingPost?.let { post ->
+        ForwardChannelPostDialog(
+            chats = state.chats.filter { it.id != chat.id },
+            onDismiss = { forwardingPost = null },
+            onForward = { targetChatId ->
+                onForwardPost(post.id, targetChatId)
+                forwardingPost = null
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ChannelPostBubble(
+    post: MessageModel,
+    compact: Boolean,
+    isRussian: Boolean,
+    hapticsEnabled: Boolean,
+    commentsEnabled: Boolean,
+    canManage: Boolean,
+    onPinPost: () -> Unit,
+    onOpenComments: () -> Unit,
+    onForward: () -> Unit,
+    onDelete: () -> Unit,
+    onOpenMedia: (MediaModel) -> Unit,
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val view = LocalView.current
+    var menuExpanded by remember(post.id) { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(post.id) {
+                detectTapGestures(onLongPress = {
+                    performLongPressHaptic(view, hapticsEnabled)
+                    menuExpanded = true
+                })
+            },
+        horizontalAlignment = Alignment.Start,
+    ) {
+        Box {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = RoundedCornerShape(
+                    topStart = 22.dp,
+                    topEnd = 22.dp,
+                    bottomStart = 8.dp,
+                    bottomEnd = 22.dp,
+                ),
+                modifier = Modifier
+                    .wrapContentWidth()
+                    .widthIn(max = if (compact) 228.dp else 276.dp),
+            ) {
+                Column(modifier = Modifier.padding(horizontal = if (compact) 10.dp else 12.dp, vertical = if (compact) 8.dp else 10.dp)) {
+                    if (post.forwardedFromUsername.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color.Black.copy(alpha = 0.08f),
+                            modifier = Modifier.clickable {
+                                openExternalUrl(context, "skytale://open/${post.forwardedFromUsername}")
+                            },
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                                Text(
+                                    "@${post.forwardedFromUsername}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                if (post.forwardedFromTitle.isNotBlank()) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        post.forwardedFromTitle,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    if (post.media != null) {
+                        ChatImageAttachment(media = post.media, onOpen = { onOpenMedia(post.media) })
+                    }
+                    if (post.text.isNotBlank()) {
+                        if (post.media != null) Spacer(Modifier.height(8.dp))
+                        MessageText(
+                            text = post.text,
+                            ownMessage = false,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.wrapContentWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        if (commentsEnabled) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .clickable(onClick = onOpenComments)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.ChatBubbleOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(17.dp),
+                                )
+                                Text(
+                                    post.commentCount.toString(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(Icons.Outlined.Visibility, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                            Text(post.viewCount.toString(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(
+                            formatClockTime(post.createdAt),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(if (isRussian) "Копировать" else "Copy") },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                    onClick = {
+                        clipboard.setText(AnnotatedString(post.text))
+                        menuExpanded = false
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (isRussian) "Переслать" else "Forward") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Forward, null) },
+                    onClick = {
+                        onForward()
+                        menuExpanded = false
+                    },
+                )
+                if (canManage) {
+                    DropdownMenuItem(
+                        text = { Text(if (post.isPinned) if (isRussian) "Открепить" else "Unpin" else if (isRussian) "Закрепить" else "Pin") },
+                        leadingIcon = { Icon(Icons.Outlined.PushPin, null) },
+                        onClick = {
+                            onPinPost()
+                            menuExpanded = false
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (isRussian) "Удалить" else "Delete") },
+                        leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                        onClick = {
+                            onDelete()
+                            menuExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelCommentsDialog(
+    comments: List<MessageModel>,
+    onDismiss: () -> Unit,
+    onSend: (String) -> Unit,
+) {
+    val isRussian = Locale.getDefault().language == "ru"
+    var draft by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (isRussian) "Комментарии" else "Comments", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Outlined.Close, contentDescription = null)
+                    }
+                }
+                if (comments.isEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(22.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                    ) {
+                        Text(
+                            if (isRussian) "Пока без комментариев" else "No comments yet",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(18.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.height(320.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(comments, key = { it.id }) { comment ->
+                            Surface(
+                                shape = RoundedCornerShape(18.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(comment.senderName, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                                    Text(comment.text.ifBlank { if (isRussian) "Сообщение удалено" else "Message deleted" })
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.Bottom) {
+                    TextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text(if (isRussian) "Комментарий" else "Comment") },
+                        maxLines = 4,
+                        shape = RoundedCornerShape(24.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        ),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    FilledIconButton(
+                        onClick = {
+                            if (draft.isNotBlank()) {
+                                onSend(draft.trim())
+                                draft = ""
+                            }
+                        },
+                    ) {
+                        Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelSettingsDialog(
+    chat: ChatModel,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String, String, Boolean) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val isRussian = Locale.getDefault().language == "ru"
+    var title by remember(chat.id) { mutableStateOf(chat.title) }
+    var username by remember(chat.id) { mutableStateOf(chat.username) }
+    var description by remember(chat.id) { mutableStateOf(chat.description) }
+    var postingPolicy by remember(chat.id) { mutableStateOf(chat.postingPolicy) }
+    var commentsEnabled by remember(chat.id) { mutableStateOf(chat.commentsEnabled) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isRussian) "Профиль канала" else "Channel profile") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text(if (isRussian) "Название" else "Title") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text(if (isRussian) "Описание" else "Description") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(if (isRussian) "Писать могут все" else "Everyone can post")
+                    Switch(
+                        checked = postingPolicy == "everyone",
+                        onCheckedChange = { postingPolicy = if (it) "everyone" else "admins" },
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(if (isRussian) "Разрешить комментарии" else "Enable comments")
+                    Switch(checked = commentsEnabled, onCheckedChange = { commentsEnabled = it })
+                }
+                TextButton(
+                    onClick = onDelete,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (isRussian) "Удалить канал" else "Delete channel", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(title.trim(), username.trim(), description.trim(), postingPolicy, commentsEnabled) }) { Text(stringsFor(if (isRussian) AppLanguage.RU else AppLanguage.EN).save) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(if (isRussian) "Отмена" else "Cancel") } },
+    )
+}
+
+@Composable
+private fun ChannelMembersDialog(
+    chat: ChatModel,
+    members: List<group.skytale.app.data.ChannelMemberModel>,
+    onDismiss: () -> Unit,
+    onToggleRole: (String, String) -> Unit,
+) {
+    val isRussian = Locale.getDefault().language == "ru"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isRussian) "Администраторы канала" else "Channel admins") },
+        text = {
+            if (members.isEmpty()) {
+                Text(if (isRussian) "Загрузка..." else "Loading...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                LazyColumn(modifier = Modifier.height(280.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(members, key = { it.user.id }) { member ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                UserAvatar(
+                                    model = member.user.avatarThumbUrl.ifBlank { member.user.avatarUrl },
+                                    displayName = member.user.nickname,
+                                    size = 40.dp,
+                                    textSize = MaterialTheme.typography.labelLarge,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(member.user.nickname)
+                                    Text("@${member.user.username}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (member.role != "owner" && chat.canManage) {
+                                    TextButton(onClick = {
+                                        onToggleRole(member.user.id, if (member.role == "admin") "member" else "admin")
+                                    }) {
+                                        Text(if (member.role == "admin") {
+                                            if (isRussian) "Снять" else "Remove"
+                                        } else {
+                                            if (isRussian) "Назначить" else "Make admin"
+                                        })
+                                    }
+                                } else {
+                                    Text(
+                                        when (member.role) {
+                                            "owner" -> if (isRussian) "Владелец" else "Owner"
+                                            "admin" -> if (isRussian) "Админ" else "Admin"
+                                            else -> if (isRussian) "Подписчик" else "Member"
+                                        },
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(if (isRussian) "Закрыть" else "Close") } },
+    )
+}
+
 private fun buildLinkedMessage(
     text: String,
     linkColor: Color,
 ): AnnotatedString = buildAnnotatedString {
-    var cursor = 0
+    data class LinkedRange(val start: Int, val endInclusive: Int, val displayed: String, val destination: String)
+    val ranges = mutableListOf<LinkedRange>()
     urlRegex.findAll(text).forEach { match ->
         val raw = match.value
         val displayUrl = raw.trimEnd('.', ',', '!', '?', ':', ';', ')', ']', '}')
-        val trailing = raw.removePrefix(displayUrl)
-        if (match.range.first > cursor) {
-            append(text.substring(cursor, match.range.first))
+        ranges += LinkedRange(
+            start = match.range.first,
+            endInclusive = match.range.first + displayUrl.length - 1,
+            displayed = displayUrl,
+            destination = if (displayUrl.startsWith("www.", ignoreCase = true)) "https://$displayUrl" else displayUrl,
+        )
+    }
+    mentionRegex.findAll(text).forEach { match ->
+        val mention = match.value
+        val username = mention.removePrefix("@")
+        ranges += LinkedRange(
+            start = match.range.first,
+            endInclusive = match.range.last,
+            displayed = mention,
+            destination = "skytale://open/$username",
+        )
+    }
+    val sortedRanges = ranges.sortedBy { it.start }
+    var cursor = 0
+    sortedRanges.forEach { range ->
+        if (range.start < cursor) {
+            return@forEach
         }
-        val destination = if (displayUrl.startsWith("www.", ignoreCase = true)) {
-            "https://$displayUrl"
-        } else {
-            displayUrl
+        if (range.start > cursor) {
+            append(text.substring(cursor, range.start))
         }
-        pushStringAnnotation(tag = "URL", annotation = destination)
+        pushStringAnnotation(tag = "URL", annotation = range.destination)
         pushStyle(
             SpanStyle(
                 color = linkColor,
@@ -4682,11 +6381,10 @@ private fun buildLinkedMessage(
                 textDecoration = TextDecoration.Underline,
             ),
         )
-        append(displayUrl)
+        append(range.displayed)
         pop()
         pop()
-        append(trailing)
-        cursor = match.range.last + 1
+        cursor = range.endInclusive + 1
     }
     if (cursor < text.length) {
         append(text.substring(cursor))
@@ -4710,6 +6408,7 @@ private fun openExternalUrl(context: Context, url: String) {
 }
 
 private val urlRegex = Regex("""((https?://|www\.)[^\s<]+)""", RegexOption.IGNORE_CASE)
+private val mentionRegex = Regex("""(?<![\p{L}\p{N}_])@([\p{L}\p{N}._\-]{3,32})""")
 
 @Composable
 private fun rememberRelativeTimeTicker(periodMs: Long = 30_000L): Long {

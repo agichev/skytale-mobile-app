@@ -21,8 +21,8 @@ android {
         applicationId = "group.skytale.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "1.0.26"
+        versionCode = 36
+        versionName = "1.0.35"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -102,6 +102,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.foundation)
+    implementation("androidx.compose.material:material")
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
     implementation(libs.compose.animation)

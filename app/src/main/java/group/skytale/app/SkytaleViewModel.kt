@@ -15,6 +15,7 @@ import group.skytale.app.data.AppSettings
 import group.skytale.app.data.AuthMode
 import group.skytale.app.data.ChatModel
 import group.skytale.app.data.ContactModel
+import group.skytale.app.data.DirectoryEntryModel
 import group.skytale.app.data.FeedPostModel
 import group.skytale.app.data.HomeTab
 import group.skytale.app.data.MessageModel
@@ -60,7 +61,10 @@ data class SkytaleUiState(
     val feed: List<FeedPostModel> = emptyList(),
     val messages: List<MessageModel> = emptyList(),
     val searchUsers: List<SearchUserModel> = emptyList(),
+    val directoryResults: List<DirectoryEntryModel> = emptyList(),
+    val channelComments: List<MessageModel> = emptyList(),
     val chatSearchResults: List<MessageModel> = emptyList(),
+    val channelMembers: List<group.skytale.app.data.ChannelMemberModel> = emptyList(),
     val selectedComposerMedia: List<DraftMediaSelection> = emptyList(),
     val selectedProfileAvatar: DraftMediaSelection? = null,
     val removeProfileAvatar: Boolean = false,
@@ -72,6 +76,7 @@ data class SkytaleUiState(
     val contactPreview: ContactModel? = null,
     val contactPreviewChatId: String? = null,
     val contactPreviewMessages: List<MessageModel> = emptyList(),
+    val openedChannelCommentsPostId: String? = null,
     val replyToMessageId: String? = null,
     val chatSearchQuery: String = "",
     val addContactQuery: String = "",
@@ -116,6 +121,7 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
     private var chatJob: Job? = null
     private val uploadJobs = linkedMapOf<String, Job>()
     private var pendingIntentChatId: String? = null
+    private var pendingPublicUsername: String? = null
     private var appInForeground: Boolean = false
 
     init {
@@ -149,11 +155,16 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
                         pendingIntentChatId = null
                         openChat(chatId)
                     }
+                    pendingPublicUsername?.let { username ->
+                        pendingPublicUsername = null
+                        openPublicUsername(username)
+                    }
                 } else {
                     state.value = state.value.copy(messages = emptyList(), openedChatId = null)
                     stopSyncService()
                     repository.stopRealtime()
                     pendingIntentChatId = null
+                    pendingPublicUsername = null
                 }
             }
         }
@@ -323,7 +334,7 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateAddContactQuery(value: String) {
-        state.value = state.value.copy(addContactQuery = value, searchUsers = emptyList())
+        state.value = state.value.copy(addContactQuery = value, searchUsers = emptyList(), directoryResults = emptyList())
     }
 
     fun updateChatListQuery(value: String) {
@@ -480,11 +491,201 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun searchDirectory() {
+        val query = state.value.addContactQuery.trim()
+        if (query.length < 3) {
+            state.value = state.value.copy(directoryResults = emptyList())
+            return
+        }
+        viewModelScope.launch {
+            runBusy {
+                val results = repository.searchDirectory(query)
+                state.value = state.value.copy(directoryResults = results)
+            }
+        }
+    }
+
     fun addContactAndOpen(userId: String) {
         viewModelScope.launch {
             runBusy {
                 val chatId = repository.addContact(userId = userId)
                 openChat(chatId)
+            }
+        }
+    }
+
+    fun openDirectoryEntry(entry: DirectoryEntryModel) {
+        when (entry.kind) {
+            "channel" -> {
+                viewModelScope.launch {
+                    runBusy {
+                        repository.joinChannel(entry.id)
+                        openChat(entry.id)
+                    }
+                }
+            }
+
+            else -> {
+                val selfUserId = state.value.session?.userId.orEmpty()
+                if (entry.id == selfUserId && selfUserId.isNotBlank()) {
+                    selectTab(HomeTab.PROFILE)
+                    return
+                }
+                addContactAndOpen(entry.id)
+            }
+        }
+    }
+
+    fun createChannel(
+        title: String,
+        username: String,
+        description: String,
+        avatarUrl: String = "",
+        avatarThumbUrl: String = "",
+        commentsEnabled: Boolean = true,
+    ) {
+        viewModelScope.launch {
+            runBusy {
+                val chatId = repository.createChannel(
+                    title = title,
+                    username = username,
+                    description = description,
+                    avatarUrl = avatarUrl,
+                    avatarThumbUrl = avatarThumbUrl,
+                    commentsEnabled = commentsEnabled,
+                )
+                openChat(chatId)
+            }
+        }
+    }
+
+    fun updateChannel(
+        chatId: String,
+        title: String,
+        username: String,
+        description: String,
+        avatarUrl: String = "",
+        avatarThumbUrl: String = "",
+        postingPolicy: String = "admins",
+        commentsEnabled: Boolean = true,
+    ) {
+        viewModelScope.launch {
+            runBusy {
+                repository.updateChannel(
+                    chatId = chatId,
+                    title = title,
+                    username = username,
+                    description = description,
+                    avatarUrl = avatarUrl,
+                    avatarThumbUrl = avatarThumbUrl,
+                    postingPolicy = postingPolicy,
+                    commentsEnabled = commentsEnabled,
+                )
+            }
+        }
+    }
+
+    fun updateChannelAvatar(chatId: String, uri: String, fileName: String, mimeType: String) {
+        val chat = state.value.chats.firstOrNull { it.id == chatId } ?: return
+        viewModelScope.launch {
+            runBusy {
+                val prepared = prepareImageUpload(
+                    DraftMediaSelection(
+                        uri = uri,
+                        fileName = fileName,
+                        mimeType = mimeType,
+                    ),
+                )
+                val uploaded = repository.uploadImage(
+                    bytes = prepared.bytes,
+                    fileName = prepared.fileName,
+                    mimeType = prepared.mimeType,
+                    purpose = "avatar",
+                )
+                repository.updateChannel(
+                    chatId = chatId,
+                    title = chat.title,
+                    username = chat.username,
+                    description = chat.description,
+                    avatarUrl = uploaded.url,
+                    avatarThumbUrl = uploaded.thumbUrl.ifBlank { uploaded.previewUrl },
+                    postingPolicy = chat.postingPolicy,
+                    commentsEnabled = chat.commentsEnabled,
+                )
+            }
+        }
+    }
+
+    fun leaveChannel(chatId: String) {
+        viewModelScope.launch {
+            runBusy {
+                repository.leaveChannel(chatId)
+                if (state.value.openedChatId == chatId) {
+                    closeChat()
+                }
+            }
+        }
+    }
+
+    fun deleteChannel(chatId: String) {
+        viewModelScope.launch {
+            runBusy {
+                repository.deleteChannel(chatId)
+                if (state.value.openedChatId == chatId) {
+                    closeChat()
+                }
+            }
+        }
+    }
+
+    fun loadChannelMembers(chatId: String) {
+        viewModelScope.launch {
+            runBusy {
+                state.value = state.value.copy(channelMembers = repository.channelMembers(chatId))
+            }
+        }
+    }
+
+    fun updateChannelRole(chatId: String, userId: String, role: String) {
+        viewModelScope.launch {
+            runBusy {
+                repository.setChannelRole(chatId, userId, role)
+                state.value = state.value.copy(channelMembers = repository.channelMembers(chatId))
+            }
+        }
+    }
+
+    fun pinChannelPost(chatId: String, messageId: String?) {
+        viewModelScope.launch {
+            runBusy {
+                repository.pinChannelPost(chatId, messageId)
+            }
+        }
+    }
+
+    fun loadChannelComments(chatId: String, messageId: String) {
+        viewModelScope.launch {
+            runBusy {
+                state.value = state.value.copy(
+                    openedChannelCommentsPostId = messageId,
+                    channelComments = repository.channelComments(chatId, messageId),
+                )
+            }
+        }
+    }
+
+    fun closeChannelComments() {
+        state.value = state.value.copy(openedChannelCommentsPostId = null, channelComments = emptyList())
+    }
+
+    fun sendChannelComment(chatId: String, messageId: String, text: String) {
+        val normalized = text.trim()
+        if (normalized.isBlank()) return
+        viewModelScope.launch {
+            runBusy {
+                repository.createChannelComment(chatId, messageId, normalized)
+                state.value = state.value.copy(channelComments = repository.channelComments(chatId, messageId))
+                repository.loadMessages(chatId = chatId, replace = true, markRead = false)
             }
         }
     }
@@ -519,6 +720,7 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun openChat(chatId: String) {
+        val chatModel = state.value.chats.firstOrNull { it.id == chatId }
         state.value = state.value.copy(
             openedChatId = chatId,
             replyToMessageId = null,
@@ -527,6 +729,9 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
             chatInitialLoading = false,
             chatSearchResults = emptyList(),
             chatSearchQuery = "",
+            channelComments = emptyList(),
+            channelMembers = emptyList(),
+            openedChannelCommentsPostId = null,
         )
         repository.setActiveChat(chatId)
         if (state.value.lastSeenVisibility != "ghost") {
@@ -537,7 +742,12 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
         chatJob?.cancel()
         val currentUserId = state.value.session?.userId.orEmpty()
         chatJob = viewModelScope.launch {
-            repository.observeMessages(chatId, currentUserId).collect { messages ->
+            val flow = if (chatModel?.type == "channel") {
+                repository.observeChannelPosts(chatId, currentUserId)
+            } else {
+                repository.observeMessages(chatId, currentUserId)
+            }
+            flow.collect { messages ->
                 if (state.value.openedChatId != chatId) return@collect
                 state.value = state.value.copy(messages = messages)
             }
@@ -559,7 +769,17 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
 
     fun closeChat() {
         repository.setActiveChat(null)
-        state.value = state.value.copy(openedChatId = null, chatSearchResults = emptyList(), chatSearchQuery = "", replyToMessageId = null, selectedComposerMedia = emptyList(), chatInitialLoading = false)
+        state.value = state.value.copy(
+            openedChatId = null,
+            chatSearchResults = emptyList(),
+            chatSearchQuery = "",
+            replyToMessageId = null,
+            selectedComposerMedia = emptyList(),
+            chatInitialLoading = false,
+            channelComments = emptyList(),
+            channelMembers = emptyList(),
+            openedChannelCommentsPostId = null,
+        )
     }
 
     fun handleNotificationChatIntent(chatId: String?) {
@@ -568,6 +788,15 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
             openChat(normalized)
         } else {
             pendingIntentChatId = normalized
+        }
+    }
+
+    fun handlePublicLink(username: String?) {
+        val normalized = username?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() } ?: return
+        if (state.value.session != null) {
+            openPublicUsername(normalized)
+        } else {
+            pendingPublicUsername = normalized
         }
     }
 
@@ -665,6 +894,18 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
     fun deleteMessage(messageId: String) {
         viewModelScope.launch {
             runCatching { repository.deleteMessage(messageId) }
+        }
+    }
+
+    fun forwardMessageToChat(sourceMessageId: String, targetChatId: String) {
+        viewModelScope.launch {
+            runBusy {
+                repository.sendMessage(
+                    chatId = targetChatId,
+                    text = "",
+                    forwardMessageId = sourceMessageId,
+                )
+            }
         }
     }
 
@@ -833,6 +1074,15 @@ class SkytaleViewModel(application: Application) : AndroidViewModel(application)
 
     fun consumeSoundEvent() {
         state.value = state.value.copy(pendingSoundEvent = null)
+    }
+
+    private fun openPublicUsername(username: String) {
+        viewModelScope.launch {
+            runBusy {
+                val target = repository.resolvePublicUsername(username) ?: error("Username not found.")
+                openDirectoryEntry(target)
+            }
+        }
     }
 
     private fun updateSettings(transform: (AppSettings) -> AppSettings) {
