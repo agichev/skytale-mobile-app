@@ -96,6 +96,7 @@ data class UiSoundEvent(
 enum class SoundEffect {
     SENT,
     INCOMING,
+    GESTURE_THRESHOLD,
 }
 
 data class DraftMediaSelection(

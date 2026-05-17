@@ -120,6 +120,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.rounded.Done
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.ExperimentalMaterialApi
@@ -157,9 +158,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberSwipeToDismissBoxState
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -223,6 +221,7 @@ import group.skytale.app.data.SearchUserModel
 import group.skytale.app.SoundEffect
 import group.skytale.app.data.ThemeMode
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -338,16 +337,17 @@ fun SkytaleRoot(
         val soundRes = when (event.type) {
             SoundEffect.SENT -> R.raw.enter_sound
             SoundEffect.INCOMING -> R.raw.notification_sound_fx
+            SoundEffect.GESTURE_THRESHOLD -> R.raw.clc
         }
-        runCatching {
-            val player = MediaPlayer.create(context, soundRes)
-            player?.setOnCompletionListener { completed -> completed.release() }
-            player?.setOnErrorListener { failed, _, _ ->
-                failed.release()
-                true
-            }
-            player?.start()
-        }
+        playUiSound(
+            context = context,
+            soundRes = soundRes,
+            volume = when (event.type) {
+                SoundEffect.GESTURE_THRESHOLD -> 0.24f
+                SoundEffect.SENT -> 1f
+                SoundEffect.INCOMING -> 1f
+            },
+        )
         onConsumeSoundEvent()
     }
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -421,9 +421,12 @@ fun SkytaleRoot(
                     )
                     var overlayChatId by remember { mutableStateOf<String?>(null) }
                     var overlayVisible by remember { mutableStateOf(false) }
-                    LaunchedEffect(state.openedChatId) {
-                        if (state.openedChatId != null) {
-                            overlayChatId = state.openedChatId
+                    LaunchedEffect(state.openedChatId, state.chats) {
+                        val currentOpenedChat = state.openedChatId?.let { openedId ->
+                            state.chats.firstOrNull { it.id == openedId }?.id
+                        }
+                        if (currentOpenedChat != null) {
+                            overlayChatId = currentOpenedChat
                             overlayVisible = true
                         } else {
                             overlayVisible = false
@@ -439,7 +442,16 @@ fun SkytaleRoot(
                         if (overlayChatId != null) {
                             val overlayState = if (state.openedChatId == null) state.copy(openedChatId = overlayChatId) else state
                             val openedChat = overlayState.chats.firstOrNull { it.id == overlayChatId }
-                            if (openedChat?.type == "channel") {
+                            if (openedChat == null) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.98f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator()
+                                }
+                            } else if (openedChat.type == "channel") {
                                 ChannelScreen(
                                     state = overlayState,
                                     strings = strings,
@@ -511,20 +523,6 @@ fun SkytaleRoot(
                 text = { Text(state.offlineMessage) },
                 confirmButton = { TextButton(onClick = onDismissErrorDialogs) { Text(strings.retry) } },
             )
-        }
-        AnimatedVisibility(
-            visible = state.busy,
-            enter = fadeIn(),
-            exit = fadeOut(),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.25f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
         }
         legalDocumentDialog?.let { document ->
             LegalDocumentDialog(
@@ -892,6 +890,26 @@ private fun LanguageStep(
     }
 }
 
+private fun playUiSound(context: Context, soundRes: Int, volume: Float = 1f) {
+    runCatching {
+        val player = MediaPlayer.create(context, soundRes)
+        val normalizedVolume = volume.coerceIn(0f, 1f)
+        player?.setVolume(normalizedVolume, normalizedVolume)
+        player?.setOnCompletionListener { completed -> completed.release() }
+        player?.setOnErrorListener { failed, _, _ ->
+            failed.release()
+            true
+        }
+        player?.start()
+    }
+}
+
+private fun gestureActivationThresholds(density: androidx.compose.ui.unit.Density): Pair<Float, Float> = with(density) {
+    46.dp.toPx() to 82.dp.toPx()
+}
+
+private fun isAnimatedImageMime(mimeType: String): Boolean = mimeType.substringBefore(';').trim().equals("image/gif", ignoreCase = true)
+
 @Composable
 private fun UsernameStep(
     strings: SkytaleStrings,
@@ -934,6 +952,7 @@ private fun PasswordStep(
     onGeneratePassword: () -> Unit,
     onContinue: () -> Unit,
 ) {
+    var passwordVisible by remember(registerMode) { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.SpaceBetween,
@@ -950,7 +969,15 @@ private fun PasswordStep(
                 onValueChange = onPasswordChanged,
                 label = { Text(strings.password) },
                 singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                            contentDescription = null,
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
             if (registerMode) {
@@ -1059,6 +1086,7 @@ private fun CredentialsStep(
     onPasswordChanged: (String) -> Unit,
     onGeneratePassword: () -> Unit,
 ) {
+    var passwordVisible by remember(state.authMode) { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.SpaceBetween,
@@ -1090,7 +1118,15 @@ private fun CredentialsStep(
                 onValueChange = onPasswordChanged,
                 label = { Text(strings.password) },
                 singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                            contentDescription = null,
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
             if (state.authMode == AuthMode.REGISTER) {
@@ -1604,42 +1640,106 @@ private fun ChatRow(
 ) {
     val view = LocalView.current
     val strings = LocalSkytaleStrings.current
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val (armThreshold, activateThreshold) = remember(density) { gestureActivationThresholds(density) }
+    val maxSwipeOffset = activateThreshold + with(density) { 22.dp.toPx() }
+    val isRussian = remember { Locale.getDefault().language == "ru" }
+    val archiveLabel = remember { if (Locale.getDefault().language == "ru") "В архиве" else "Archived" }
     androidx.compose.runtime.key(chat.id, chat.isPinned, chat.isArchived) {
-        val dismissState = rememberSwipeToDismissBoxState(
-            confirmValueChange = {
-                if (!swipesEnabled) {
-                    return@rememberSwipeToDismissBoxState false
-                }
-                when (it) {
-                    SwipeToDismissBoxValue.StartToEnd -> onTogglePin()
-                    SwipeToDismissBoxValue.EndToStart -> onToggleArchive()
-                    SwipeToDismissBoxValue.Settled -> Unit
-                }
-                false
-            },
+        var swipeOffset by remember(chat.id) { mutableStateOf(0f) }
+        var swipeArmed by remember(chat.id) { mutableStateOf(false) }
+        val animatedSwipeOffset by animateFloatAsState(
+            targetValue = swipeOffset,
+            animationSpec = spring(dampingRatio = 0.88f, stiffness = 480f),
+            label = "chat-row-swipe",
         )
-        SwipeToDismissBox(
-            state = dismissState,
-            gesturesEnabled = swipesEnabled,
-            backgroundContent = {
-                val aligned = if (dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), RoundedCornerShape(24.dp))
-                        .padding(horizontal = 18.dp),
-                    contentAlignment = aligned,
-                ) {
-                    Icon(
-                        imageVector = if (dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Icons.Outlined.PushPin else Icons.Outlined.Archive,
-                        contentDescription = null,
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(chat.id, swipesEnabled) {
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            swipeOffset = 0f
+                            swipeArmed = false
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            if (!swipesEnabled) return@detectHorizontalDragGestures
+                            swipeOffset = (swipeOffset + dragAmount).coerceIn(-maxSwipeOffset, maxSwipeOffset)
+                            if (!swipeArmed && kotlin.math.abs(swipeOffset) >= armThreshold) {
+                                swipeArmed = true
+                                performGestureThresholdHaptic(view, hapticsEnabled)
+                                playUiSound(context, R.raw.clc, 0.24f)
+                            } else if (swipeArmed && kotlin.math.abs(swipeOffset) < armThreshold * 0.82f) {
+                                swipeArmed = false
+                            }
+                        },
+                        onDragEnd = {
+                            val shouldActivate = swipeArmed && kotlin.math.abs(swipeOffset) >= activateThreshold
+                            val action = if (shouldActivate) {
+                                if (swipeOffset > 0f) onTogglePin else onToggleArchive
+                            } else {
+                                null
+                            }
+                            swipeOffset = 0f
+                            swipeArmed = false
+                            action?.invoke()
+                        },
+                        onDragCancel = {
+                            swipeOffset = 0f
+                            swipeArmed = false
+                        },
                     )
+                },
+        ) {
+            val aligned = if (animatedSwipeOffset >= 0f) Alignment.CenterStart else Alignment.CenterEnd
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        MaterialTheme.colorScheme.primary.copy(alpha = if (swipeArmed) 0.24f else 0.12f),
+                        RoundedCornerShape(24.dp),
+                    )
+                    .padding(horizontal = 18.dp),
+                contentAlignment = aligned,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (animatedSwipeOffset < 0f && swipeArmed) {
+                        Text(
+                            if (chat.isArchived) {
+                                if (isRussian) "Вернуть" else "Restore"
+                            } else {
+                                if (isRussian) "Архив" else "Archive"
+                            },
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    Icon(
+                        imageVector = if (animatedSwipeOffset >= 0f) Icons.Outlined.PushPin else Icons.Outlined.Archive,
+                        contentDescription = null,
+                        tint = if (swipeArmed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (animatedSwipeOffset >= 0f && swipeArmed) {
+                        Text(
+                            if (chat.isPinned) {
+                                if (isRussian) "Открепить" else "Unpin"
+                            } else {
+                                if (isRussian) "Закрепить" else "Pin"
+                            },
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
                 }
             }
-        ) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .offset { IntOffset(animatedSwipeOffset.roundToInt(), 0) }
                     .combinedClickable(
                         onClick = onClick,
                         onLongClick = {
@@ -1651,7 +1751,9 @@ private fun ChatRow(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = if (compact) 12.dp else 16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = if (compact) 12.dp else 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     UserAvatar(
@@ -1668,6 +1770,20 @@ private fun ChatRow(
                             Spacer(Modifier.width(8.dp))
                             if (chat.isPinned) Icon(Icons.Outlined.PushPin, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.secondary)
                             if (chat.isMuted) Icon(Icons.AutoMirrored.Outlined.VolumeOff, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (chat.isArchived) {
+                                Spacer(Modifier.width(8.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                ) {
+                                    Text(
+                                        archiveLabel,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -1764,6 +1880,7 @@ private fun ChatScreen(
     var backSwipeHapticTriggered by remember(state.openedChatId) { mutableStateOf(false) }
     var attachmentMenuExpanded by remember(state.openedChatId) { mutableStateOf(false) }
     var pendingCameraUri by remember(state.openedChatId) { mutableStateOf<Uri?>(null) }
+    val showChatLoadingPlaceholder = state.chatInitialLoading && messages.isEmpty()
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
         uris.forEach { uri ->
             onSelectComposerMedia(
@@ -1898,12 +2015,15 @@ private fun ChatScreen(
         }
     }
 
-    LaunchedEffect(messages.lastOrNull()?.id) {
+    LaunchedEffect(messages.lastOrNull()?.id, state.chatInitialLoading) {
         if (messages.isEmpty()) {
             initialScrollDone = false
             return@LaunchedEffect
         }
         if (!initialScrollDone) {
+            if (state.chatInitialLoading) {
+                return@LaunchedEffect
+            }
             listState.scrollToItem(messages.lastIndex)
             initialScrollDone = true
             return@LaunchedEffect
@@ -2190,7 +2310,9 @@ private fun ChatScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = if (messages.isEmpty() || initialScrollDone) 1f else 0f },
+                    .graphicsLayer {
+                        alpha = if (messages.isEmpty() || initialScrollDone) 1f else 0f
+                    },
                 state = listState,
                 contentPadding = PaddingValues(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2236,6 +2358,30 @@ private fun ChatScreen(
                         progress = pending.progress,
                         onCancel = { onCancelPendingUpload(pending.localId) },
                     )
+                }
+            }
+            if (showChatLoadingPlaceholder) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.92f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            strokeWidth = 2.8.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = if (localeIsRussian) "Загрузка чата..." else "Loading chat...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
             androidx.compose.animation.AnimatedVisibility(
@@ -2498,10 +2644,10 @@ private fun MessageBubble(
     var editing by remember { mutableStateOf(false) }
     var editText by remember { mutableStateOf(message.text) }
     val density = LocalDensity.current
-    val replyThreshold = with(density) { 72.dp.toPx() }
-    val maxReplyOffset = with(density) { 88.dp.toPx() }
+    val (replyArmThreshold, replyActivateThreshold) = remember(density) { gestureActivationThresholds(density) }
+    val maxReplyOffset = replyActivateThreshold + with(density) { 18.dp.toPx() }
     var replyOffset by remember(message.id) { mutableStateOf(0f) }
-    var replyTriggered by remember(message.id) { mutableStateOf(false) }
+    var replyArmed by remember(message.id) { mutableStateOf(false) }
     val animatedReplyOffset by animateFloatAsState(
         targetValue = replyOffset,
         animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
@@ -2526,17 +2672,19 @@ private fun MessageBubble(
                             onDragStart = {
                                 onBackDragStart()
                                 replyOffset = 0f
-                                replyTriggered = false
+                                replyArmed = false
                             },
                             onHorizontalDrag = { _, dragAmount ->
                                 if (dragAmount > 0f) {
                                     onBackDrag(dragAmount)
                                 } else if (dragAmount < 0) {
                                     replyOffset = (replyOffset + (-dragAmount * 0.78f)).coerceAtMost(maxReplyOffset)
-                                    if (!replyTriggered && replyOffset >= replyThreshold) {
-                                        replyTriggered = true
-                                        performLongPressHaptic(view, hapticsEnabled)
-                                        onReplyMessage(message.id)
+                                    if (!replyArmed && replyOffset >= replyArmThreshold) {
+                                        replyArmed = true
+                                        performGestureThresholdHaptic(view, hapticsEnabled)
+                                        playUiSound(context, R.raw.clc, 0.24f)
+                                    } else if (replyArmed && replyOffset < replyArmThreshold * 0.82f) {
+                                        replyArmed = false
                                     }
                                 } else if (replyOffset > 0f) {
                                     replyOffset = (replyOffset - dragAmount).coerceAtLeast(0f)
@@ -2544,13 +2692,16 @@ private fun MessageBubble(
                             },
                             onDragEnd = {
                                 onBackDragEnd()
+                                if (replyArmed && replyOffset >= replyActivateThreshold) {
+                                    onReplyMessage(message.id)
+                                }
                                 replyOffset = 0f
-                                replyTriggered = false
+                                replyArmed = false
                             },
                             onDragCancel = {
                                 onBackDragCancel()
                                 replyOffset = 0f
-                                replyTriggered = false
+                                replyArmed = false
                             },
                         )
                     },
@@ -2564,7 +2715,7 @@ private fun MessageBubble(
                     Icon(
                         imageVector = Icons.AutoMirrored.Outlined.Reply,
                         contentDescription = null,
-                        tint = if (animatedReplyOffset >= replyThreshold * 0.55f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        tint = if (replyArmed) MaterialTheme.colorScheme.primary else if (animatedReplyOffset >= replyArmThreshold * 0.55f) MaterialTheme.colorScheme.primary.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                         modifier = Modifier
                             .size(18.dp)
                             .alpha((animatedReplyOffset / maxReplyOffset).coerceIn(0f, 1f)),
@@ -2747,17 +2898,17 @@ private fun InfoTab(strings: SkytaleStrings) {
                 InfoCardContent(
                     icon = Icons.Outlined.Info,
                     title = "Что это за мессенджер",
-                    body = "Skytale - это мессенджер с нормальным фокусом на приватность и удобство. Проект сейчас в активной разработке: приложение регулярно обновляется, функции постепенно доезжают, а сама платформа ещё собирается в цельный продукт.",
+                    body = "Skytale - это мессенджер с нормальным фокусом на приватность и удобство. Проект сейчас в активной разработке: приложение регулярно обновляется, функции постепенно доезжают, а сама платформа ещё собирается в цельный продукт. Официальный канал с новостями и обновлениями: @skytale",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.Shield,
                     title = "Что с безопасностью",
-                    body = "Соединение с сервером идёт только по защищённому каналу через официальный домен. В приложении отключён незашифрованный трафик, а локальные сессии и настройки на устройстве тоже не хранятся в открытом виде.",
+                    body = "Безопасность здесь строится на защищённом соединении, аккуратном хранении данных на устройстве и постепенном ужесточении архитектуры по мере развития продукта. Мы стараемся усиливать защиту без ломания повседневного опыта.",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.LockOpen,
                     title = "Какое шифрование мы используем",
-                    body = "Мы используем защищённое соединение и шифрование хранения сообщений. Проще говоря: переписка идёт до сервера по защищённому каналу, а сами сообщения не лежат в базе в открытом виде, а держатся в зашифрованном виде на сервере.",
+                    body = "Сейчас Skytale использует защищённую передачу данных и шифрование хранения сообщений. Архитектура безопасности продолжает развиваться, и мы постепенно двигаемся к более сильной модели защиты без резких и ломающих изменений для пользователей.",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.FavoriteBorder,
@@ -2770,17 +2921,17 @@ private fun InfoTab(strings: SkytaleStrings) {
                 InfoCardContent(
                     icon = Icons.Outlined.Info,
                     title = "What Skytale is",
-                    body = "Skytale is a messenger being built with a real focus on privacy and usability. The project is in active development, updates ship often, and a lot of the missing functionality is still being added step by step.",
+                    body = "Skytale is a messenger being built with a real focus on privacy and usability. The project is in active development, updates ship often, and a lot of the missing functionality is still being added step by step. The official news and updates channel is @skytale.",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.Shield,
                     title = "What security looks like today",
-                    body = "The app uses protected transport over the official domain, blocks cleartext traffic, and keeps session data encrypted on the device instead of leaving it in plain storage.",
+                    body = "Security here is built around protected transport, careful on-device storage, and gradual hardening of the architecture as the product grows. The goal is to improve protection without making the messenger awkward to use.",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.LockOpen,
                     title = "What encryption we use",
-                    body = "Skytale uses protected transport together with encrypted message storage. In practice that means messages travel to the server over a secured channel and are not stored in the database as plain readable text. It is a solid security baseline for the current stage of the product, and the security architecture is still evolving.",
+                    body = "Skytale currently uses protected transport together with encrypted message storage. The security architecture is still evolving, and the plan is to keep strengthening it without breaking the everyday messaging flow.",
                 ),
                 InfoCardContent(
                     icon = Icons.Outlined.FavoriteBorder,
@@ -2799,9 +2950,9 @@ private fun InfoTab(strings: SkytaleStrings) {
     val supportButton = if (isRussian) "Поддержать" else "Support"
     val changelogTitle = if (isRussian) "Changelog установленной версии" else "Installed version changelog"
     val changelogBody = if (isRussian) {
-        "Версия ${BuildConfig.VERSION_NAME}\n• Профили и каналы дочищены: у своего профиля убран бессмысленный переход в публичную ссылку, username теперь копирует публичную ссылку по удержанию, а у каналов убраны дубли кнопок редактирования и смены аватарки.\n• Посты в каналах стали ровнее и спокойнее: нижняя строка больше не разъезжается, комментарии/просмотры/время стоят подряд, закреп больше не висит отдельной плашкой, а сами обновления канала больше не должны дёргать экран при редактировании и удалении.\n• Публичные страницы use.skytale.dpdns.org упрощены и приближены к основному сайту: убраны лишние рамки, свечение, пустые плашки про несуществующие публичные посты, а backend и SQLite сохранены с предыдущими оптимизациями производительности."
+        "Версия ${BuildConfig.VERSION_NAME}\n• Добавлен показ пароля при вводе и починены кликабельные упоминания в профилях.\n• Жесты ответа и действий по чатам стали аккуратнее: теперь у них есть понятный порог с виброоткликом и мягким звуком.\n• Архивные чаты получили заметную пометку, загрузка изображений стала живее, а отправка GIF работает корректнее.\n• Исправлены проблемы с экраном чата: больше не должен мелькать предыдущий диалог, а стартовая прокрутка стала спокойнее.\n• Инфо-раздел обновлён и очищен от лишних технических подробностей."
     } else {
-        "Version ${BuildConfig.VERSION_NAME}\n• Profiles and channels were cleaned up further: your own profile no longer tries to reopen the public link, usernames now copy the public URL on long press, and channel settings no longer duplicate edit or avatar actions.\n• Channel posts now look calmer and update more safely: the footer stays in one line, comments/views/time sit in sequence, the pinned badge no longer hangs over posts, and channel updates should stop causing jumpy redraws on edits or deletes.\n• Public pages on use.skytale.dpdns.org were flattened to match the main site more closely, with the noisy framing, glow, and empty \"no public posts\" panel removed while keeping the earlier backend and SQLite performance work."
+        "Version ${BuildConfig.VERSION_NAME}\n• Added password visibility while typing and fixed clickable mentions inside profiles.\n• Reply and chat actions now use a smarter gesture threshold with haptics and a softer cue sound.\n• Archived chats are labeled more clearly, image loading feels more alive, and GIF sending behaves more reliably.\n• Chat opening was cleaned up so the previous conversation should no longer flash, and the initial scroll is calmer.\n• The Info section was refreshed and stripped of unnecessary technical details."
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -2860,7 +3011,11 @@ private fun InfoTab(strings: SkytaleStrings) {
                         }
                         Text(changelogTitle, style = MaterialTheme.typography.titleMedium)
                     }
-                    Text(changelogBody, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    MessageText(
+                        text = changelogBody,
+                        ownMessage = false,
+                        style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+                    )
                 }
             }
         }
@@ -2894,7 +3049,11 @@ private fun InfoSectionCard(content: InfoCardContent) {
                 }
                 Text(content.title, style = MaterialTheme.typography.titleMedium)
             }
-            Text(content.body, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            MessageText(
+                text = content.body,
+                ownMessage = false,
+                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+            )
         }
     }
 }
@@ -4170,6 +4329,58 @@ private fun Context.saveCroppedAvatar(
 }
 
 @Composable
+private fun LoadingImage(
+    model: Any?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(18.dp),
+    contentScale: ContentScale = ContentScale.Crop,
+) {
+    SubcomposeAsyncImage(
+        model = model,
+        contentDescription = contentDescription,
+        modifier = modifier.clip(shape),
+        contentScale = contentScale,
+        loading = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.surfaceContainerHighest,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                MaterialTheme.colorScheme.surfaceContainerHigh,
+                            ),
+                        ),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(26.dp),
+                    strokeWidth = 2.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        },
+        error = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Image,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+    )
+}
+
+@Composable
 private fun UserAvatar(
     model: String,
     displayName: String,
@@ -4177,12 +4388,12 @@ private fun UserAvatar(
     textSize: TextStyle,
 ) {
     if (model.isNotBlank()) {
-        AsyncImage(
+        LoadingImage(
             model = model,
             contentDescription = displayName,
             modifier = Modifier
-                .size(size)
-                .clip(CircleShape),
+                .size(size),
+            shape = CircleShape,
             contentScale = ContentScale.Crop,
         )
     } else {
@@ -4216,12 +4427,13 @@ private fun ChatImageAttachment(
             .fillMaxWidth()
             .clickable(onClick = onOpen),
     ) {
-        AsyncImage(
+        LoadingImage(
             model = media.previewUrl.ifBlank { media.thumbUrl.ifBlank { media.url } },
             contentDescription = media.fileName.ifBlank { "image" },
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspect),
+            shape = RoundedCornerShape(18.dp),
             contentScale = ContentScale.Crop,
         )
     }
@@ -4255,12 +4467,12 @@ private fun SelectedMediaComposer(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box {
-                AsyncImage(
+                LoadingImage(
                     model = selections.firstOrNull()?.uri,
                     contentDescription = null,
                     modifier = Modifier
-                        .size(72.dp)
-                        .clip(RoundedCornerShape(18.dp)),
+                        .size(72.dp),
+                    shape = RoundedCornerShape(18.dp),
                     contentScale = ContentScale.Crop,
                 )
                 if (selections.size > 1) {
@@ -4367,18 +4579,18 @@ private fun PendingImageBubble(
             modifier = Modifier.widthIn(max = 240.dp),
         ) {
             Box(modifier = Modifier.padding(8.dp)) {
-                AsyncImage(
+                LoadingImage(
                     model = localUri,
                     contentDescription = null,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(18.dp)),
+                        .aspectRatio(1f),
+                    shape = RoundedCornerShape(18.dp),
                     contentScale = ContentScale.Crop,
                 )
                 Box(
                     modifier = Modifier
-                        .matchParentSize()
+                        .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.24f), RoundedCornerShape(18.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -4787,9 +4999,12 @@ private fun ContactProfileScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             if (user.about.isNotBlank()) {
-                                Text(
-                                    user.about,
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                MessageText(
+                                    text = user.about,
+                                    ownMessage = false,
+                                    style = MaterialTheme.typography.bodyLarge.copy(
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    ),
                                 )
                                 HorizontalDivider()
                             }
@@ -5050,6 +5265,11 @@ private fun MessageText(
     style: TextStyle,
 ) {
     val context = LocalContext.current
+    val baseColor = if (style.color == Color.Unspecified) {
+        if (ownMessage) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    } else {
+        style.color
+    }
     val linkColor = if (ownMessage) {
         MaterialTheme.colorScheme.onPrimary
     } else {
@@ -5058,12 +5278,12 @@ private fun MessageText(
     val annotated = remember(text, linkColor) { buildLinkedMessage(text, linkColor) }
     val hasLinks = remember(text) { urlRegex.containsMatchIn(text) || mentionRegex.containsMatchIn(text) }
     if (!hasLinks) {
-        Text(text = text, style = style)
+        Text(text = text, style = style.copy(color = baseColor))
         return
     }
     ClickableText(
         text = annotated,
-        style = style,
+        style = style.copy(color = baseColor),
         onClick = { offset ->
             annotated
                 .getStringAnnotations(tag = "URL", start = offset, end = offset)
